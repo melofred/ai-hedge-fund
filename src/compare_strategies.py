@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from colorama import Fore, Style, init
+import questionary
 
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent))
@@ -23,7 +24,7 @@ sys.path.append(str(Path(__file__).parent))
 from backtester import Backtester
 from main import run_hedge_fund
 from tools.api import get_prices
-from utils.analysts import ANALYST_ORDER
+from utils.analysts import ANALYST_ORDER, ANALYST_CONFIG
 
 init(autoreset=True)
 
@@ -291,8 +292,8 @@ def main():
                        help="End date (YYYY-MM-DD)")
     parser.add_argument("--initial-cash", type=float, default=100000.0,
                        help="Initial cash position (default: 100000)")
-    parser.add_argument("--agents", type=str, required=True,
-                       help="Comma-separated list of agent names")
+    parser.add_argument("--agents", type=str, required=False,
+                       help="Comma-separated list of agent names (if not provided, will prompt for selection)")
     parser.add_argument("--model-name", type=str, default="gpt-4o-mini",
                        help="LLM model name (default: gpt-4o-mini)")
     parser.add_argument("--model-provider", type=str, default="OpenAI",
@@ -306,25 +307,55 @@ def main():
     
     # Parse inputs
     tickers = [t.strip() for t in args.tickers.split(',')]
-    agents = [a.strip() for a in args.agents.split(',')]
     
-    # Convert display names to internal keys
-    from utils.analysts import ANALYST_CONFIG
-    agent_keys = []
-    for agent_name in agents:
-        # Find the internal key for this display name
-        found = False
-        for key, config in ANALYST_CONFIG.items():
-            if config["display_name"] == agent_name:
-                agent_keys.append(key)
-                found = True
-                break
-        if not found:
-            print(f"{Fore.RED}❌ Invalid agent: {agent_name}{Style.RESET_ALL}")
-            print(f"Available agents: {', '.join([config['display_name'] for config in ANALYST_CONFIG.values()])}")
-            sys.exit(1)
-    
-    agents = agent_keys  # Use internal keys for the backtester
+    # Handle agent selection
+    if args.agents:
+        # Use provided agents
+        agents = [a.strip() for a in args.agents.split(',')]
+        
+        # Convert display names to internal keys
+        agent_keys = []
+        for agent_name in agents:
+            # Find the internal key for this display name
+            found = False
+            for key, config in ANALYST_CONFIG.items():
+                if config["display_name"] == agent_name:
+                    agent_keys.append(key)
+                    found = True
+                    break
+            if not found:
+                print(f"{Fore.RED}❌ Invalid agent: {agent_name}{Style.RESET_ALL}")
+                print(f"Available agents: {', '.join([config['display_name'] for config in ANALYST_CONFIG.values()])}")
+                sys.exit(1)
+        
+        agents = agent_keys  # Use internal keys for the backtester
+    else:
+        # Interactive agent selection
+        print(f"{Fore.CYAN}🤖 Select AI Analysts for Strategy Comparison{Style.RESET_ALL}")
+        print("Choose which analysts to include in your strategy comparison.")
+        print()
+        
+        choices = questionary.checkbox(
+            "Select your AI analysts (use Space to select/unselect):",
+            choices=[questionary.Choice(display, value=value) for display, value in ANALYST_ORDER],
+            instruction="\n\nInstructions: \n1. Press Space to select/unselect analysts.\n2. Press 'a' to select/unselect all.\n3. Press Enter when done to run the comparison.\n",
+            validate=lambda x: len(x) > 0 or "You must select at least one analyst.",
+            style=questionary.Style(
+                [
+                    ("checkbox-selected", "fg:green"),
+                    ("selected", "fg:green noinherit"),
+                    ("highlighted", "noinherit"),
+                    ("pointer", "noinherit"),
+                ]
+            ),
+        ).ask()
+        
+        if not choices:
+            print("\n\nInterrupt received. Exiting...")
+            sys.exit(0)
+        else:
+            agents = choices
+            print(f"\nSelected analysts: {', '.join(Fore.GREEN + choice.title().replace('_', ' ') + Style.RESET_ALL for choice in choices)}\n")
     
     # Get display names for output
     agent_display_names = [ANALYST_CONFIG[key]["display_name"] for key in agents]

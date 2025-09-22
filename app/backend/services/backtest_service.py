@@ -13,6 +13,7 @@ from src.tools.api import (
     get_insider_trades,
 )
 from app.backend.services.graph import run_graph_async, parse_hedge_fund_response
+from src.utils.analysts import ANALYST_CONFIG
 from app.backend.services.portfolio import create_portfolio
 
 class BacktestService:
@@ -305,6 +306,9 @@ class BacktestService:
 
         backtest_results = []
 
+        # Precompute agent horizons (in business days)
+        agent_horizons = {key: max(1, int(cfg.get("horizon_days", 1))) for key, cfg in ANALYST_CONFIG.items()}
+
         for i, current_date in enumerate(dates):
             # Allow other async operations to run
             await asyncio.sleep(0)
@@ -348,6 +352,10 @@ class BacktestService:
             except Exception:
                 continue
 
+            # Determine which agents are active today by horizon cadence
+            # We treat day index i relative to start as the cadence driver.
+            active_agents = [key for key, horizon in agent_horizons.items() if (i % horizon) == 0]
+
             # Create portfolio for this iteration
             portfolio_for_graph = create_portfolio(
                 initial_cash=self.portfolio["cash"],
@@ -358,6 +366,11 @@ class BacktestService:
             
             # Copy current portfolio state to the graph portfolio
             portfolio_for_graph.update(self.portfolio)
+
+            # Inject active agent keys into data for gating in agent wrapper
+            if "data" not in portfolio_for_graph:
+                # ensure no accidental nested data key
+                pass
 
             # Execute graph-based agent decisions
             try:
@@ -370,12 +383,15 @@ class BacktestService:
                     model_name=self.model_name,
                     model_provider=self.model_provider,
                     request=self.request,
+                    active_agents=active_agents,
                 )
                 
                 # Parse the decisions from the graph result
                 if result and result.get("messages"):
                     decisions = parse_hedge_fund_response(result["messages"][-1].content)
-                    analyst_signals = result.get("data", {}).get("analyst_signals", {})
+                    # Attach active agent filtering on signals: keep only from active agents
+                    raw_signals = result.get("data", {}).get("analyst_signals", {})
+                    analyst_signals = {agent_id: sig for agent_id, sig in raw_signals.items() if any(_id.startswith(base) for base in active_agents for _id in [agent_id])}
                 else:
                     decisions = {}
                     analyst_signals = {}
@@ -384,6 +400,14 @@ class BacktestService:
                 print(f"Error running graph for {current_date_str}: {e}")
                 decisions = {}
                 analyst_signals = {}
+
+            # Zero-out decisions produced by inactive analysts via portfolio manager by enforcing cadence here as well
+            if decisions:
+                # Portfolio manager outputs are per ticker; we don't know contributing agent per ticker
+                # To honor cadence, we allow trades only on days when at least one active agent exists
+                allow_trades_today = len(active_agents) > 0
+                if not allow_trades_today:
+                    decisions = {t: {"action": "hold", "quantity": 0} for t in self.tickers}
 
             # Execute trades based on decisions
             executed_trades = {}

@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import time
 
-from src.data.cache import get_cache
+from src.utils.cache import get_cache, cache_prices, get_cached_prices, cache_financials, get_cached_financials, cache_news, get_cached_news, cache_insider_trades, get_cached_insider_trades
 from src.data.models import (
     CompanyNews,
     CompanyNewsResponse,
@@ -18,9 +18,6 @@ from src.data.models import (
     InsiderTradeResponse,
     CompanyFactsResponse,
 )
-
-# Global cache instance
-_cache = get_cache()
 
 
 def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: dict = None, max_retries: int = 3) -> requests.Response:
@@ -47,8 +44,8 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
             response = requests.get(url, headers=headers)
         
         if response.status_code == 429 and attempt < max_retries:
-            # Linear backoff: 60s, 90s, 120s, 150s...
-            delay = 60 + (30 * attempt)
+            # Linear backoff: 20s, 40s, 60s, 80s...
+            delay = 20 + (20 * attempt)
             print(f"Rate limited (429). Attempt {attempt + 1}/{max_retries + 1}. Waiting {delay}s before retrying...")
             time.sleep(delay)
             continue
@@ -59,11 +56,9 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
 
 def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None) -> list[Price]:
     """Fetch price data from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date}_{end_date}"
-    
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_prices(cache_key):
+    # Check cache first
+    cached_data = get_cached_prices(ticker, start_date, end_date)
+    if cached_data is not None:
         return [Price(**price) for price in cached_data]
 
     # If not in cache, fetch from API
@@ -84,8 +79,8 @@ def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None)
     if not prices:
         return []
 
-    # Cache the results using the comprehensive cache key
-    _cache.set_prices(cache_key, [p.model_dump() for p in prices])
+    # Cache the results
+    cache_prices(ticker, start_date, end_date, [p.model_dump() for p in prices])
     return prices
 
 
@@ -97,11 +92,9 @@ def get_financial_metrics(
     api_key: str = None,
 ) -> list[FinancialMetrics]:
     """Fetch financial metrics from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{period}_{end_date}_{limit}"
-    
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_financial_metrics(cache_key):
+    # Check cache first
+    cached_data = get_cached_financials(ticker, end_date, limit)
+    if cached_data is not None:
         return [FinancialMetrics(**metric) for metric in cached_data]
 
     # If not in cache, fetch from API
@@ -122,8 +115,8 @@ def get_financial_metrics(
     if not financial_metrics:
         return []
 
-    # Cache the results as dicts using the comprehensive cache key
-    _cache.set_financial_metrics(cache_key, [m.model_dump() for m in financial_metrics])
+    # Cache the results
+    cache_financials(ticker, end_date, limit, [m.model_dump() for m in financial_metrics])
     return financial_metrics
 
 
@@ -172,11 +165,9 @@ def get_insider_trades(
     api_key: str = None,
 ) -> list[InsiderTrade]:
     """Fetch insider trades from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
-    
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_insider_trades(cache_key):
+    # Check cache first
+    cached_data = get_cached_insider_trades(ticker, end_date, limit)
+    if cached_data is not None:
         return [InsiderTrade(**trade) for trade in cached_data]
 
     # If not in cache, fetch from API
@@ -221,8 +212,8 @@ def get_insider_trades(
     if not all_trades:
         return []
 
-    # Cache the results using the comprehensive cache key
-    _cache.set_insider_trades(cache_key, [trade.model_dump() for trade in all_trades])
+    # Cache the results
+    cache_insider_trades(ticker, end_date, limit, [trade.model_dump() for trade in all_trades])
     return all_trades
 
 
@@ -234,11 +225,9 @@ def get_company_news(
     api_key: str = None,
 ) -> list[CompanyNews]:
     """Fetch company news from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
-    cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
-    
-    # Check cache first - simple exact match
-    if cached_data := _cache.get_company_news(cache_key):
+    # Check cache first
+    cached_data = get_cached_news(ticker, end_date, limit)
+    if cached_data is not None:
         return [CompanyNews(**news) for news in cached_data]
 
     # If not in cache, fetch from API
@@ -283,8 +272,8 @@ def get_company_news(
     if not all_news:
         return []
 
-    # Cache the results using the comprehensive cache key
-    _cache.set_company_news(cache_key, [news.model_dump() for news in all_news])
+    # Cache the results
+    cache_news(ticker, end_date, limit, [news.model_dump() for news in all_news])
     return all_news
 
 

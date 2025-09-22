@@ -28,6 +28,7 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
     portfolio = state["data"]["portfolio"]
     analyst_signals = state["data"]["analyst_signals"]
     tickers = state["data"]["tickers"]
+    active_agents = set(state["data"].get("active_agents") or [])
 
     position_limits = {}
     current_prices = {}
@@ -60,6 +61,11 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
                 sig = signals[ticker].get("signal")
                 conf = signals[ticker].get("confidence")
                 if sig is not None and conf is not None:
+                    # If active_agents is set, only include signals from active base agents
+                    if active_agents:
+                        base = agent.split("_")[0] if agent else ""
+                        if base not in active_agents:
+                            continue
                     ticker_signals[agent] = {"sig": sig, "conf": conf}
         signals_by_ticker[ticker] = ticker_signals
 

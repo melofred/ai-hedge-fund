@@ -9,7 +9,7 @@ from src.agents.portfolio_manager import portfolio_management_agent
 from src.agents.risk_manager import risk_management_agent
 from src.graph.state import AgentState
 from src.utils.display import print_trading_output
-from src.utils.analysts import ANALYST_ORDER, get_analyst_nodes
+from src.utils.analysts import ANALYST_ORDER, get_analyst_nodes, ANALYST_CONFIG
 from src.utils.progress import progress
 from src.llm.models import LLM_ORDER, OLLAMA_LLM_ORDER, get_model_info, ModelProvider
 from src.utils.ollama import ensure_ollama_and_model
@@ -51,6 +51,7 @@ def run_hedge_fund(
     selected_analysts: list[str] = [],
     model_name: str = "gpt-4.1",
     model_provider: str = "OpenAI",
+    active_agents: list[str] | None = None,
 ):
     # Start progress tracking
     progress.start()
@@ -63,6 +64,8 @@ def run_hedge_fund(
         else:
             agent = app
 
+        # Allow horizon gating via metadata injection; here we default to all active
+        # The CLI backtester will compute active_agents per day. If not provided, None
         final_state = agent.invoke(
             {
                 "messages": [
@@ -76,6 +79,8 @@ def run_hedge_fund(
                     "start_date": start_date,
                     "end_date": end_date,
                     "analyst_signals": {},
+                    # active_agents can be populated by callers (e.g., backtester)
+                    "active_agents": active_agents,
                 },
                 "metadata": {
                     "show_reasoning": show_reasoning,

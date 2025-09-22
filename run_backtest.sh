@@ -31,7 +31,7 @@ echo "============================================================="
 # Set PYTHONPATH to include the current directory
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
-$PYTHON_CMD src/backtester.py --ticker AAPL,MSFT,NVDA --ollama
+$PYTHON_CMD src/backtester.py --tickers AAPL,MSFT,NVDA --ollama --start-date 2024-09-01
 
 echo "✅ AI Hedge Fund Backtester completed!"
 

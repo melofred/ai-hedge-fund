@@ -32,7 +32,7 @@ TICKERS="${TICKERS:-AAPL,MSFT,NVDA}"
 START_DATE="${START_DATE:-2024-11-01}"
 END_DATE="${END_DATE:-2024-12-01}"
 INITIAL_CASH="${INITIAL_CASH:-100000}"
-AGENTS="${AGENTS:-Aswath Damodaran}"
+# AGENTS is now optional - if not set, will prompt for selection
 MODEL_NAME="${MODEL_NAME:-gpt-4o-mini}"
 MODEL_PROVIDER="${MODEL_PROVIDER:-OpenAI}"
 OUTPUT_DIR="${OUTPUT_DIR:-outputs}"
@@ -48,24 +48,39 @@ fi
 
 echo "📈 Running strategy comparison..."
 echo "Tickers: $TICKERS"
-echo "Agents: $AGENTS"
+if [ -n "$AGENTS" ]; then
+    echo "Agents: $AGENTS"
+else
+    echo "Agents: (will prompt for selection)"
+fi
 echo "Period: $START_DATE to $END_DATE"
 echo "Initial Cash: \$$INITIAL_CASH"
 echo "Model: $MODEL_NAME ($MODEL_PROVIDER)"
 echo "Output: $OUTPUT_DIR/"
 echo ""
 
+# Build the command
+CMD="$PYTHON_CMD src/compare_strategies.py \
+    --tickers \"$TICKERS\" \
+    --start-date \"$START_DATE\" \
+    --end-date \"$END_DATE\" \
+    --initial-cash \"$INITIAL_CASH\" \
+    --model-name \"$MODEL_NAME\" \
+    --model-provider \"$MODEL_PROVIDER\" \
+    --output-dir \"$OUTPUT_DIR\""
+
+# Add agents if provided
+if [ -n "$AGENTS" ]; then
+    CMD="$CMD --agents \"$AGENTS\""
+fi
+
+# Add Ollama flag if set
+if [ -n "$OLLAMA_FLAG" ]; then
+    CMD="$CMD $OLLAMA_FLAG"
+fi
+
 # Run the comparison
-$PYTHON_CMD src/compare_strategies.py \
-    --tickers "$TICKERS" \
-    --start-date "$START_DATE" \
-    --end-date "$END_DATE" \
-    --initial-cash "$INITIAL_CASH" \
-    --agents "$AGENTS" \
-    --model-name "$MODEL_NAME" \
-    --model-provider "$MODEL_PROVIDER" \
-    --output-dir "$OUTPUT_DIR" \
-    $OLLAMA_FLAG
+eval $CMD
 
 echo ""
 echo "✅ Strategy comparison completed!"

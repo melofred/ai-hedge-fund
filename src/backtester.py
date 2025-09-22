@@ -11,7 +11,7 @@ import numpy as np
 import itertools
 
 from src.llm.models import LLM_ORDER, OLLAMA_LLM_ORDER, get_model_info, ModelProvider
-from src.utils.analysts import ANALYST_ORDER
+from src.utils.analysts import ANALYST_ORDER, ANALYST_CONFIG
 from src.main import run_hedge_fund
 from src.tools.api import (
     get_company_news,
@@ -303,7 +303,10 @@ class Backtester:
         else:
             self.portfolio_values = []
 
-        for current_date in dates:
+        # Precompute horizons in business days
+        agent_horizons = {key: max(1, int(cfg.get("horizon_days", 1))) for key, cfg in ANALYST_CONFIG.items()}
+
+        for i, current_date in enumerate(dates):
             lookback_start = (current_date - timedelta(days=30)).strftime("%Y-%m-%d")
             current_date_str = current_date.strftime("%Y-%m-%d")
             previous_date_str = (current_date - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -342,6 +345,9 @@ class Backtester:
             # ---------------------------------------------------------------
             # 1) Execute the agent's trades
             # ---------------------------------------------------------------
+            # Determine active agents by cadence for this date index
+            active_agents = [key for key, horizon in agent_horizons.items() if (i % horizon) == 0]
+
             output = self.agent(
                 tickers=self.tickers,
                 start_date=lookback_start,
@@ -350,9 +356,14 @@ class Backtester:
                 model_name=self.model_name,
                 model_provider=self.model_provider,
                 selected_analysts=self.selected_analysts,
+                active_agents=active_agents,
             )
             decisions = output["decisions"]
             analyst_signals = output["analyst_signals"]
+
+            # If no agents are active today, force holds
+            if len(active_agents) == 0:
+                decisions = {t: {"action": "hold", "quantity": 0} for t in self.tickers}
 
             # Execute trades for each ticker
             executed_trades = {}

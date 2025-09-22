@@ -333,7 +333,7 @@ def generate_pabrai_output(
           DATA:
           {analysis_data}
 
-          Return EXACTLY this JSON:
+          Return EXACTLY this JSON (do not include the ticker as a key):
           {{
             "signal": "bullish" | "bearish" | "neutral",
             "confidence": float (0-100),

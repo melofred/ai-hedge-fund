@@ -27,6 +27,7 @@ ANALYST_CONFIG = {
         "agent_func": aswath_damodaran_agent,
         "type": "analyst",
         "order": 0,
+        "horizon_days": 90,
     },
     "ben_graham": {
         "display_name": "Ben Graham",
@@ -35,6 +36,7 @@ ANALYST_CONFIG = {
         "agent_func": ben_graham_agent,
         "type": "analyst",
         "order": 1,
+        "horizon_days": 90,
     },
     "bill_ackman": {
         "display_name": "Bill Ackman",
@@ -43,6 +45,7 @@ ANALYST_CONFIG = {
         "agent_func": bill_ackman_agent,
         "type": "analyst",
         "order": 2,
+        "horizon_days": 90,
     },
     "cathie_wood": {
         "display_name": "Cathie Wood",
@@ -51,6 +54,7 @@ ANALYST_CONFIG = {
         "agent_func": cathie_wood_agent,
         "type": "analyst",
         "order": 3,
+        "horizon_days": 90,
     },
     "charlie_munger": {
         "display_name": "Charlie Munger",
@@ -59,6 +63,7 @@ ANALYST_CONFIG = {
         "agent_func": charlie_munger_agent,
         "type": "analyst",
         "order": 4,
+        "horizon_days": 90,
     },
     "michael_burry": {
         "display_name": "Michael Burry",
@@ -67,6 +72,7 @@ ANALYST_CONFIG = {
         "agent_func": michael_burry_agent,
         "type": "analyst",
         "order": 5,
+        "horizon_days": 90,
     },
     "mohnish_pabrai": {
         "display_name": "Mohnish Pabrai",
@@ -75,6 +81,7 @@ ANALYST_CONFIG = {
         "agent_func": mohnish_pabrai_agent,
         "type": "analyst",
         "order": 6,
+        "horizon_days": 90,
     },
     "peter_lynch": {
         "display_name": "Peter Lynch",
@@ -83,6 +90,7 @@ ANALYST_CONFIG = {
         "agent_func": peter_lynch_agent,
         "type": "analyst",
         "order": 6,
+        "horizon_days": 90,
     },
     "phil_fisher": {
         "display_name": "Phil Fisher",
@@ -91,6 +99,7 @@ ANALYST_CONFIG = {
         "agent_func": phil_fisher_agent,
         "type": "analyst",
         "order": 7,
+        "horizon_days": 90,
     },
     "rakesh_jhunjhunwala": {
         "display_name": "Rakesh Jhunjhunwala",
@@ -99,6 +108,7 @@ ANALYST_CONFIG = {
         "agent_func": rakesh_jhunjhunwala_agent,
         "type": "analyst",
         "order": 8,
+        "horizon_days": 90,
     },
     "stanley_druckenmiller": {
         "display_name": "Stanley Druckenmiller",
@@ -107,6 +117,7 @@ ANALYST_CONFIG = {
         "agent_func": stanley_druckenmiller_agent,
         "type": "analyst",
         "order": 9,
+        "horizon_days": 5,
     },
     "warren_buffett": {
         "display_name": "Warren Buffett",
@@ -115,6 +126,7 @@ ANALYST_CONFIG = {
         "agent_func": warren_buffett_agent,
         "type": "analyst",
         "order": 10,
+        "horizon_days": 90,
     },
     "technical_analyst": {
         "display_name": "Technical Analyst",
@@ -123,6 +135,7 @@ ANALYST_CONFIG = {
         "agent_func": technical_analyst_agent,
         "type": "analyst",
         "order": 11,
+        "horizon_days": 1,
     },
     "fundamentals_analyst": {
         "display_name": "Fundamentals Analyst",
@@ -131,6 +144,7 @@ ANALYST_CONFIG = {
         "agent_func": fundamentals_analyst_agent,
         "type": "analyst",
         "order": 12,
+        "horizon_days": 90,
     },
     "sentiment_analyst": {
         "display_name": "Sentiment Analyst",
@@ -139,6 +153,7 @@ ANALYST_CONFIG = {
         "agent_func": sentiment_analyst_agent,
         "type": "analyst",
         "order": 13,
+        "horizon_days": 1,
     },
     "valuation_analyst": {
         "display_name": "Valuation Analyst",
@@ -147,6 +162,7 @@ ANALYST_CONFIG = {
         "agent_func": valuation_analyst_agent,
         "type": "analyst",
         "order": 14,
+        "horizon_days": 90,
     },
 }
 
