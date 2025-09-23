@@ -38,15 +38,42 @@ def peter_lynch_agent(state: AgentState, agent_id: str = "peter_lynch_agent"):
     The result is a bullish/bearish/neutral signal, along with a
     confidence (0–100) and a textual reasoning explanation.
     """
-
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 25  # seconds per ticker
+    
     data = state["data"]
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     analysis_data = {}
     lynch_analysis = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(lynch_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - LYNCH ANALYSIS INCOMPLETE!")
+            print(f"   📊 Missing Lynch analysis for: {', '.join(tickers[len(lynch_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing analysis")
+            break
+            
         progress.update_status(agent_id, ticker, "Gathering financial line items")
         # Relevant line items for Peter Lynch's approach
         financial_line_items = search_line_items(
@@ -129,12 +156,17 @@ def peter_lynch_agent(state: AgentState, agent_id: str = "peter_lynch_agent"):
         }
 
         progress.update_status(agent_id, ticker, "Generating Peter Lynch analysis")
+        
+        # Step: LLM analysis
+        llm_start = time.time()
         lynch_output = generate_lynch_output(
             ticker=ticker,
             analysis_data=analysis_data[ticker],
             state=state,
             agent_id=agent_id,
         )
+        llm_time = time.time() - llm_start
+        print(f"   🤖 LLM analysis: {llm_time:.2f}s")
 
         lynch_analysis[ticker] = {
             "signal": lynch_output.signal,
@@ -143,6 +175,10 @@ def peter_lynch_agent(state: AgentState, agent_id: str = "peter_lynch_agent"):
         }
 
         progress.update_status(agent_id, ticker, "Done", analysis=lynch_output.reasoning)
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # Wrap up results
     message = HumanMessage(content=json.dumps(lynch_analysis), name=agent_id)
@@ -154,6 +190,16 @@ def peter_lynch_agent(state: AgentState, agent_id: str = "peter_lynch_agent"):
     state["data"]["analyst_signals"][agent_id] = lynch_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(lynch_analysis)
+    print(f"\n📈 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
 
     return {"messages": [message], "data": state["data"]}
 

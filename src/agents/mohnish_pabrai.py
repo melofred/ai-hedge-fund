@@ -18,10 +18,25 @@ class MohnishPabraiSignal(BaseModel):
 
 def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agent"):
     """Evaluate stocks using Mohnish Pabrai's checklist and 'heads I win, tails I don't lose much' approach."""
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 25  # seconds per ticker
+    
     data = state["data"]
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
 
     analysis_data: dict[str, any] = {}
     pabrai_analysis: dict[str, any] = {}
@@ -29,8 +44,32 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
     # Pabrai focuses on: downside protection, simple business, moat via unit economics, FCF yield vs alternatives,
     # and potential for doubling in 2-3 years at low risk.
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(pabrai_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - PABRAI ANALYSIS INCOMPLETE!")
+            print(f"   📊 Missing Pabrai analysis for: {', '.join(tickers[len(pabrai_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing analysis")
+            break
+            
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        metrics = get_financial_metrics(ticker, end_date, period="annual", limit=8, api_key=api_key)
+        
+        # Step 1: Financial metrics
+        metrics_start = time.time()
+        try:
+            metrics = get_financial_metrics(ticker, end_date, period="annual", limit=8, api_key=api_key)
+            metrics_time = time.time() - metrics_start
+            print(f"   📊 Financial metrics: {metrics_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching financial metrics for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching metrics")
+            metrics = []
+            metrics_time = time.time() - metrics_start
 
         progress.update_status(agent_id, ticker, "Gathering financial line items")
         line_items = search_line_items(
@@ -100,12 +139,17 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
         }
 
         progress.update_status(agent_id, ticker, "Generating Pabrai analysis")
+        
+        # Step 3: LLM analysis
+        llm_start = time.time()
         pabrai_output = generate_pabrai_output(
             ticker=ticker,
             analysis_data=analysis_data,
             state=state,
             agent_id=agent_id,
         )
+        llm_time = time.time() - llm_start
+        print(f"   🤖 LLM analysis: {llm_time:.2f}s")
 
         pabrai_analysis[ticker] = {
             "signal": pabrai_output.signal,
@@ -114,6 +158,10 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
         }
 
         progress.update_status(agent_id, ticker, "Done", analysis=pabrai_output.reasoning)
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     message = HumanMessage(content=json.dumps(pabrai_analysis), name=agent_id)
 
@@ -121,6 +169,16 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
         show_agent_reasoning(pabrai_analysis, "Mohnish Pabrai Agent")
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(pabrai_analysis)
+    print(f"\n📊 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
 
     state["data"]["analyst_signals"][agent_id] = pabrai_analysis
 

@@ -228,8 +228,14 @@ def print_trading_output(result: dict) -> None:
 
 def print_backtest_results(table_rows: list) -> None:
     """Print the backtest results in a nicely formatted table"""
+    from datetime import datetime
+    
     # Clear the screen
     os.system("cls" if os.name == "nt" else "clear")
+    
+    # Print timestamp
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"{Fore.YELLOW}[{timestamp}]{Style.RESET_ALL} Processing backtest results...")
 
     # Split rows into ticker rows and summary rows
     ticker_rows = []
@@ -245,7 +251,8 @@ def print_backtest_results(table_rows: list) -> None:
     if summary_rows:
         # Pick the most recent summary by date (YYYY-MM-DD)
         latest_summary = max(summary_rows, key=lambda r: r[0])
-        print(f"\n{Fore.WHITE}{Style.BRIGHT}PORTFOLIO SUMMARY:{Style.RESET_ALL}")
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"\n{Fore.YELLOW}[{timestamp}]{Style.RESET_ALL} {Fore.WHITE}{Style.BRIGHT}PORTFOLIO SUMMARY:{Style.RESET_ALL}")
 
         # Adjusted indexes after adding Long/Short Shares
         position_str = latest_summary[7].split("$")[1].split(Style.RESET_ALL)[0].replace(",", "")

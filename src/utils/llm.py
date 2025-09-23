@@ -2,7 +2,7 @@
 
 import json
 from pydantic import BaseModel
-from src.llm.models import get_model, get_model_info
+from src.llm.models import get_model, get_model_info, ModelProvider
 from src.utils.progress import progress
 from src.graph.state import AgentState
 
@@ -45,6 +45,20 @@ def call_llm(
         if request and hasattr(request, 'api_keys'):
             api_keys = request.api_keys
 
+    # Convert string provider to enum if needed
+    if isinstance(model_provider, str):
+        try:
+            model_provider = ModelProvider(model_provider.upper())
+        except ValueError:
+            # Try to find a matching provider
+            for provider in ModelProvider:
+                if provider.value.upper() == model_provider.upper():
+                    model_provider = provider
+                    break
+            else:
+                print(f"⚠️  Unknown model provider: {model_provider}, defaulting to OpenAI")
+                model_provider = ModelProvider.OPENAI
+    
     model_info = get_model_info(model_name, model_provider)
     llm = get_model(model_name, model_provider, api_keys)
 

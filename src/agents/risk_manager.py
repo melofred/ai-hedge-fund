@@ -10,10 +10,25 @@ from src.utils.api_key import get_api_key_from_state
 ##### Risk Management Agent #####
 def risk_management_agent(state: AgentState, agent_id: str = "risk_management_agent"):
     """Controls position sizing based on volatility-adjusted risk factors for multiple tickers."""
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 20  # seconds per ticker
+    
     portfolio = state["data"]["portfolio"]
     data = state["data"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     
     # Initialize risk analysis for each ticker
     risk_analysis = {}
@@ -25,14 +40,37 @@ def risk_management_agent(state: AgentState, agent_id: str = "risk_management_ag
     all_tickers = set(tickers) | set(portfolio.get("positions", {}).keys())
     
     for ticker in all_tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(risk_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - RISK ANALYSIS INCOMPLETE!")
+            print(f"   📊 Missing risk analysis for: {', '.join(all_tickers - set(risk_analysis.keys()))}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing risk calculations")
+            break
+            
         progress.update_status(agent_id, ticker, "Fetching price data and calculating volatility")
         
-        prices = get_prices(
-            ticker=ticker,
-            start_date=data["start_date"],
-            end_date=data["end_date"],
-            api_key=api_key,
-        )
+        # Step 1: Price data and volatility
+        price_start = time.time()
+        try:
+            prices = get_prices(
+                ticker=ticker,
+                start_date=data["start_date"],
+                end_date=data["end_date"],
+                api_key=api_key,
+            )
+            price_time = time.time() - price_start
+            print(f"   📊 Price data: {price_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching price data for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching prices")
+            prices = []
+            price_time = time.time() - price_start
 
         if not prices:
             progress.update_status(agent_id, ticker, "Warning: No price data found")
@@ -199,8 +237,22 @@ def risk_management_agent(state: AgentState, agent_id: str = "risk_management_ag
             ticker, 
             f"Adj. limit: {combined_limit_pct:.1%}, Available: ${max_position_size:.0f}"
         )
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(risk_analysis)
+    print(f"\n🛡️  {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(all_tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(all_tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(all_tickers) - processed_tickers}")
 
     message = HumanMessage(
         content=json.dumps(risk_analysis),

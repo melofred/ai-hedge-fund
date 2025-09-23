@@ -31,10 +31,25 @@ class MichaelBurrySignal(BaseModel):
 
 def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"):
     """Analyse stocks using Michael Burry's deep‑value, contrarian framework."""
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 30  # seconds per ticker (Burry analysis is complex)
+    
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
     data = state["data"]
     end_date: str = data["end_date"]  # YYYY‑MM‑DD
     tickers: list[str] = data["tickers"]
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
 
     # We look one year back for insider trades / news flow
     start_date = (datetime.fromisoformat(end_date) - timedelta(days=365)).date().isoformat()
@@ -43,11 +58,35 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
     burry_analysis: dict[str, dict] = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(burry_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - BURRY ANALYSIS INCOMPLETE!")
+            print(f"   📊 Missing Burry analysis for: {', '.join(tickers[len(burry_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing analysis")
+            break
+            
         # ------------------------------------------------------------------
         # Fetch raw data
         # ------------------------------------------------------------------
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        metrics = get_financial_metrics(ticker, end_date, period="ttm", limit=5, api_key=api_key)
+        
+        # Step 1: Financial metrics
+        metrics_start = time.time()
+        try:
+            metrics = get_financial_metrics(ticker, end_date, period="ttm", limit=5, api_key=api_key)
+            metrics_time = time.time() - metrics_start
+            print(f"   📊 Financial metrics: {metrics_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching financial metrics for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching metrics")
+            metrics = []
+            metrics_time = time.time() - metrics_start
 
         progress.update_status(agent_id, ticker, "Fetching line items")
         line_items = search_line_items(
@@ -128,12 +167,17 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         }
 
         progress.update_status(agent_id, ticker, "Generating LLM output")
+        
+        # Step: LLM analysis
+        llm_start = time.time()
         burry_output = _generate_burry_output(
             ticker=ticker,
             analysis_data=analysis_data,
             state=state,
             agent_id=agent_id,
         )
+        llm_time = time.time() - llm_start
+        print(f"   🤖 LLM analysis: {llm_time:.2f}s")
 
         burry_analysis[ticker] = {
             "signal": burry_output.signal,
@@ -142,6 +186,10 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
         }
 
         progress.update_status(agent_id, ticker, "Done", analysis=burry_output.reasoning)
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # ----------------------------------------------------------------------
     # Return to the graph
@@ -154,6 +202,16 @@ def michael_burry_agent(state: AgentState, agent_id: str = "michael_burry_agent"
     state["data"]["analyst_signals"][agent_id] = burry_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(burry_analysis)
+    print(f"\n📊 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
 
     return {"messages": [message], "data": state["data"]}
 

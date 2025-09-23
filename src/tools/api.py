@@ -47,6 +47,7 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
             # Linear backoff: 20s, 40s, 60s, 80s...
             delay = 20 + (20 * attempt)
             print(f"Rate limited (429). Attempt {attempt + 1}/{max_retries + 1}. Waiting {delay}s before retrying...")
+            print(f"URL: {url}")
             time.sleep(delay)
             continue
         

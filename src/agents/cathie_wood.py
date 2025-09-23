@@ -24,16 +24,55 @@ def cathie_wood_agent(state: AgentState, agent_id: str = "cathie_wood_agent"):
     3. Invests mostly in AI, robotics, genomic sequencing, fintech, and blockchain.
     4. Willing to endure short-term volatility for long-term gains.
     """
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 25  # seconds per ticker
+    
     data = state["data"]
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     analysis_data = {}
     cw_analysis = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(cw_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - CATHIE WOOD ANALYSIS INCOMPLETE!")
+            print(f"   📊 Missing Cathie Wood analysis for: {', '.join(tickers[len(cw_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing analysis")
+            break
+            
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5, api_key=api_key)
+        
+        # Step 1: Financial metrics
+        metrics_start = time.time()
+        try:
+            metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5, api_key=api_key)
+            metrics_time = time.time() - metrics_start
+            print(f"   📊 Financial metrics: {metrics_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching financial metrics for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching metrics")
+            metrics = []
+            metrics_time = time.time() - metrics_start
 
         progress.update_status(agent_id, ticker, "Gathering financial line items")
         # Request multiple periods of data (annual or TTM) for a more robust view.
@@ -85,16 +124,25 @@ def cathie_wood_agent(state: AgentState, agent_id: str = "cathie_wood_agent"):
         analysis_data[ticker] = {"signal": signal, "score": total_score, "max_score": max_possible_score, "disruptive_analysis": disruptive_analysis, "innovation_analysis": innovation_analysis, "valuation_analysis": valuation_analysis}
 
         progress.update_status(agent_id, ticker, "Generating Cathie Wood analysis")
+        
+        # Step: LLM analysis
+        llm_start = time.time()
         cw_output = generate_cathie_wood_output(
             ticker=ticker,
             analysis_data=analysis_data,
             state=state,
             agent_id=agent_id,
         )
+        llm_time = time.time() - llm_start
+        print(f"   🤖 LLM analysis: {llm_time:.2f}s")
 
         cw_analysis[ticker] = {"signal": cw_output.signal, "confidence": cw_output.confidence, "reasoning": cw_output.reasoning}
 
         progress.update_status(agent_id, ticker, "Done", analysis=cw_output.reasoning)
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     message = HumanMessage(content=json.dumps(cw_analysis), name=agent_id)
 
@@ -104,6 +152,16 @@ def cathie_wood_agent(state: AgentState, agent_id: str = "cathie_wood_agent"):
     state["data"]["analyst_signals"][agent_id] = cw_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(cw_analysis)
+    print(f"\n🚀 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
 
     return {"messages": [message], "data": state["data"]}
 

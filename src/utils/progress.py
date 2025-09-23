@@ -108,6 +108,15 @@ class AgentProgress:
             if ticker:
                 status_text.append(f"[{ticker}] ", style=Style(color="cyan"))
             status_text.append(status, style=style)
+            
+            # Add timestamp if available
+            if "timestamp" in info:
+                try:
+                    timestamp = datetime.fromisoformat(info["timestamp"].replace('Z', '+00:00'))
+                    time_str = timestamp.strftime("%H:%M:%S")
+                    status_text.append(f" [{time_str}]", style=Style(color="blue", dim=True))
+                except:
+                    pass  # Ignore timestamp formatting errors
 
             self.table.add_row(status_text)
 

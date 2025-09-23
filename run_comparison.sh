@@ -41,9 +41,9 @@ OUTPUT_DIR="${OUTPUT_DIR:-outputs}"
 OLLAMA_FLAG=""
 if [ "$USE_OLLAMA" = "true" ] || [ "$1" = "--ollama" ]; then
     OLLAMA_FLAG="--ollama"
-    MODEL_NAME="llama3.1:latest"
+    MODEL_NAME="llama3.1:8b"
     MODEL_PROVIDER="Ollama"
-    echo "🧠 Using Ollama for local LLM inference"
+    echo "🧠 Using Ollama for local LLM inference (8B model for faster performance)"
 fi
 
 echo "📈 Running strategy comparison..."
