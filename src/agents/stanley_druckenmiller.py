@@ -33,59 +33,128 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
 
     Returns a bullish/bearish/neutral signal with confidence and reasoning.
     """
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 30  # seconds per ticker
     data = state["data"]
     start_date = data["start_date"]
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     analysis_data = {}
     druck_analysis = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(druck_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - MOMENTUM ANALYSIS INCOMPLETE!")
+            print(f"   📈 Missing momentum signals for: {', '.join(tickers[len(druck_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing momentum calculations")
+            break
+            
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5, api_key=api_key)
+        
+        # Step 1: Financial metrics
+        metrics_start = time.time()
+        try:
+            metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5, api_key=api_key)
+            metrics_time = time.time() - metrics_start
+            print(f"   📊 Financial metrics: {metrics_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching financial metrics for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching metrics")
+            metrics = []
+            metrics_time = time.time() - metrics_start
 
         progress.update_status(agent_id, ticker, "Gathering financial line items")
-        # Include relevant line items for Stan Druckenmiller's approach:
-        #   - Growth & momentum: revenue, EPS, operating_income, ...
-        #   - Valuation: net_income, free_cash_flow, ebit, ebitda
-        #   - Leverage: total_debt, shareholders_equity
-        #   - Liquidity: cash_and_equivalents
-        financial_line_items = search_line_items(
-            ticker,
-            [
-                "revenue",
-                "earnings_per_share",
-                "net_income",
-                "operating_income",
-                "gross_margin",
-                "operating_margin",
-                "free_cash_flow",
-                "capital_expenditure",
-                "cash_and_equivalents",
-                "total_debt",
-                "shareholders_equity",
-                "outstanding_shares",
-                "ebit",
-                "ebitda",
-            ],
-            end_date,
-            period="annual",
-            limit=5,
-            api_key=api_key,
-        )
+        
+        # Step 2: Line items
+        line_items_start = time.time()
+        try:
+            # Include relevant line items for Stan Druckenmiller's approach:
+            #   - Growth & momentum: revenue, EPS, operating_income, ...
+            #   - Valuation: net_income, free_cash_flow, ebit, ebitda
+            #   - Leverage: total_debt, shareholders_equity
+            #   - Liquidity: cash_and_equivalents
+            financial_line_items = search_line_items(
+                ticker,
+                [
+                    "revenue",
+                    "earnings_per_share",
+                    "net_income",
+                    "operating_income",
+                    "gross_margin",
+                    "operating_margin",
+                    "free_cash_flow",
+                    "capital_expenditure",
+                    "cash_and_equivalents",
+                    "total_debt",
+                    "shareholders_equity",
+                    "outstanding_shares",
+                    "ebit",
+                    "ebitda",
+                ],
+                end_date,
+                period="annual",
+                limit=5,
+                api_key=api_key,
+            )
+            line_items_time = time.time() - line_items_start
+            print(f"   📋 Line items: {line_items_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching line items for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching line items")
+            financial_line_items = []
+            line_items_time = time.time() - line_items_start
 
         progress.update_status(agent_id, ticker, "Getting market cap")
-        market_cap = get_market_cap(ticker, end_date, api_key=api_key)
+        try:
+            market_cap = get_market_cap(ticker, end_date, api_key=api_key)
+        except Exception as e:
+            print(f"⚠️  Error fetching market cap for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching market cap")
+            market_cap = 0
 
         progress.update_status(agent_id, ticker, "Fetching insider trades")
-        insider_trades = get_insider_trades(ticker, end_date, limit=50, api_key=api_key)
+        try:
+            insider_trades = get_insider_trades(ticker, end_date, limit=50, api_key=api_key)
+        except Exception as e:
+            print(f"⚠️  Error fetching insider trades for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching insider trades")
+            insider_trades = []
 
         progress.update_status(agent_id, ticker, "Fetching company news")
-        company_news = get_company_news(ticker, end_date, limit=50, api_key=api_key)
+        try:
+            company_news = get_company_news(ticker, end_date, limit=50, api_key=api_key)
+        except Exception as e:
+            print(f"⚠️  Error fetching company news for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching news")
+            company_news = []
 
         progress.update_status(agent_id, ticker, "Fetching recent price data for momentum")
-        prices = get_prices(ticker, start_date=start_date, end_date=end_date, api_key=api_key)
+        try:
+            prices = get_prices(ticker, start_date=start_date, end_date=end_date, api_key=api_key)
+        except Exception as e:
+            print(f"⚠️  Error fetching price data for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching prices")
+            prices = []
 
         progress.update_status(agent_id, ticker, "Analyzing growth & momentum")
         growth_momentum_analysis = analyze_growth_and_momentum(financial_line_items, prices)
@@ -135,12 +204,17 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
         }
 
         progress.update_status(agent_id, ticker, "Generating Stanley Druckenmiller analysis")
+        
+        # Step 3: LLM analysis
+        llm_start = time.time()
         druck_output = generate_druckenmiller_output(
             ticker=ticker,
             analysis_data=analysis_data,
             state=state,
             agent_id=agent_id,
         )
+        llm_time = time.time() - llm_start
+        print(f"   🤖 LLM analysis: {llm_time:.2f}s")
 
         druck_analysis[ticker] = {
             "signal": druck_output.signal,
@@ -149,6 +223,10 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
         }
 
         progress.update_status(agent_id, ticker, "Done", analysis=druck_output.reasoning)
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # Wrap results in a single message
     message = HumanMessage(content=json.dumps(druck_analysis), name=agent_id)
@@ -159,6 +237,16 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
     state["data"]["analyst_signals"][agent_id] = druck_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(druck_analysis)
+    print(f"\n📈 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
     
     return {"messages": [message], "data": state["data"]}
 

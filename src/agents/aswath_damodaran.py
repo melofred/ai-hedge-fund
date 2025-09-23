@@ -33,38 +33,88 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
       • Cross-check with relative valuation (PE vs. Fwd PE sector median proxy)
     Produces a trading signal and explanation in Damodaran's analytical voice.
     """
+    import time
+    start_time = time.time()
+    max_execution_time = 60  # seconds per ticker (increased for complex DCF analysis)
+    
     data      = state["data"]
     end_date  = data["end_date"]
     tickers   = data["tickers"]
     api_key  = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+    
+    # Diagnostic logging (after variables are defined)
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
 
     analysis_data: dict[str, dict] = {}
     damodaran_signals: dict[str, dict] = {}
 
     for ticker in tickers:
+        ticker_start_time = time.time()
+        print(f"🔄 Processing {ticker}...")
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(damodaran_signals)}")
+            print(f"   ⚠️  Skipping remaining tickers - TRADING DECISIONS MAY BE INCOMPLETE!")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing agent")
+            break
+            
         # ─── Fetch core data ────────────────────────────────────────────────────
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        metrics = get_financial_metrics(ticker, end_date, period="ttm", limit=5, api_key=api_key)
+        step_start = time.time()
+        try:
+            metrics = get_financial_metrics(ticker, end_date, period="ttm", limit=5, api_key=api_key)
+            api_time = time.time() - step_start
+            print(f"   📊 Financial metrics: {api_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching financial metrics for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching metrics")
+            # Continue with empty metrics to avoid complete failure
+            metrics = []
 
         progress.update_status(agent_id, ticker, "Fetching financial line items")
-        line_items = search_line_items(
-            ticker,
-            [
-                "free_cash_flow",
-                "ebit",
-                "interest_expense",
-                "capital_expenditure",
-                "depreciation_and_amortization",
-                "outstanding_shares",
-                "net_income",
-                "total_debt",
-            ],
-            end_date,
-            api_key=api_key,
-        )
+        step_start = time.time()
+        try:
+            line_items = search_line_items(
+                ticker,
+                [
+                    "free_cash_flow",
+                    "ebit",
+                    "interest_expense",
+                    "capital_expenditure",
+                    "depreciation_and_amortization",
+                    "outstanding_shares",
+                    "net_income",
+                    "total_debt",
+                ],
+                end_date,
+                api_key=api_key,
+            )
+            api_time = time.time() - step_start
+            print(f"   📋 Line items: {api_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching line items for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching line items")
+            line_items = []
 
         progress.update_status(agent_id, ticker, "Getting market cap")
-        market_cap = get_market_cap(ticker, end_date, api_key=api_key)
+        step_start = time.time()
+        try:
+            market_cap = get_market_cap(ticker, end_date, api_key=api_key)
+            api_time = time.time() - step_start
+            print(f"   💰 Market cap: {api_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching market cap for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching market cap")
+            market_cap = 0
 
         # ─── Analyses ───────────────────────────────────────────────────────────
         progress.update_status(agent_id, ticker, "Analyzing growth and reinvestment")
@@ -113,17 +163,37 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
         }
 
         # ─── LLM: craft Damodaran-style narrative ──────────────────────────────
-        progress.update_status(agent_id, ticker, "Generating Damodaran analysis")
-        damodaran_output = generate_damodaran_output(
-            ticker=ticker,
-            analysis_data=analysis_data,
-            state=state,
-            agent_id=agent_id,
-        )
+        # Check timeout before expensive LLM call
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 LLM TIMEOUT: {agent_id} exceeded {max_execution_time}s before LLM call for {ticker}")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   🤖 Using DEFAULT NEUTRAL signal - NO AI ANALYSIS PERFORMED!")
+            print(f"   ⚠️  This ticker will have ZERO confidence in trading decisions")
+            damodaran_output = AswathDamodaranSignal(
+                signal="neutral",
+                confidence=0.0,
+                reasoning="TIMEOUT - No AI analysis performed due to time constraints"
+            )
+        else:
+            progress.update_status(agent_id, ticker, "Generating Damodaran analysis")
+            llm_start = time.time()
+            damodaran_output = generate_damodaran_output(
+                ticker=ticker,
+                analysis_data=analysis_data,
+                state=state,
+                agent_id=agent_id,
+            )
+            llm_time = time.time() - llm_start
+            print(f"   🤖 LLM analysis: {llm_time:.2f}s")
 
         damodaran_signals[ticker] = damodaran_output.model_dump()
 
         progress.update_status(agent_id, ticker, "Done", analysis=damodaran_output.reasoning)
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start_time
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # ─── Push message back to graph state ──────────────────────────────────────
     message = HumanMessage(content=json.dumps(damodaran_signals), name=agent_id)
@@ -133,6 +203,19 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
 
     state["data"]["analyst_signals"][agent_id] = damodaran_signals
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_count = len(damodaran_signals)
+    total_tickers = len(tickers)
+    completion_rate = (processed_count / total_tickers) * 100 if total_tickers > 0 else 0
+    
+    print(f"📊 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed: {processed_count}/{total_tickers} tickers ({completion_rate:.1f}%)")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if completion_rate < 100:
+        print(f"   ⚠️  INCOMPLETE: {total_tickers - processed_count} tickers skipped due to timeout")
+        print(f"   🚨 TRADING RISK: Incomplete analysis may lead to suboptimal decisions")
 
     return {"messages": [message], "data": state["data"]}
 
@@ -312,13 +395,17 @@ def calculate_intrinsic_value_dcf(metrics: list, line_items: list, risk_analysis
     # Discount rate
     discount = risk_analysis.get("cost_of_equity") or 0.09
 
-    # Project FCFF and discount
+    # Project FCFF and discount (optimized)
     pv_sum = 0.0
     g = base_growth
     g_step = (terminal_growth - base_growth) / (years - 1)
+    
+    # Pre-calculate discount factors to avoid repeated power calculations
+    discount_factors = [(1 + discount) ** yr for yr in range(1, years + 1)]
+    
     for yr in range(1, years + 1):
         fcff_t = fcff0 * (1 + g)
-        pv = fcff_t / (1 + discount) ** yr
+        pv = fcff_t / discount_factors[yr - 1]  # Use pre-calculated factor
         pv_sum += pv
         g += g_step
 

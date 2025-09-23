@@ -2,6 +2,7 @@ import json
 import time
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
+from colorama import Fore, Style
 
 from src.graph.state import AgentState, show_agent_reasoning
 from pydantic import BaseModel, Field
@@ -24,16 +25,43 @@ class PortfolioManagerOutput(BaseModel):
 ##### Portfolio Management Agent #####
 def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_manager"):
     """Makes final trading decisions and generates orders for multiple tickers"""
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 20  # seconds per ticker
+    
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(state['data']['tickers'])}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(state['data']['tickers'])}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
 
     portfolio = state["data"]["portfolio"]
     analyst_signals = state["data"]["analyst_signals"]
     tickers = state["data"]["tickers"]
+    active_agents = set(state["data"].get("active_agents") or [])
 
     position_limits = {}
     current_prices = {}
     max_shares = {}
     signals_by_ticker = {}
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(signals_by_ticker)}")
+            print(f"   ⚠️  Skipping remaining tickers - PORTFOLIO DECISIONS INCOMPLETE!")
+            print(f"   💼 Missing decisions for: {', '.join(tickers[len(signals_by_ticker):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing decision logic")
+            break
+            
         progress.update_status(agent_id, ticker, "Processing analyst signals")
 
         # Find the corresponding risk manager for this portfolio manager
@@ -60,6 +88,11 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
                 sig = signals[ticker].get("signal")
                 conf = signals[ticker].get("confidence")
                 if sig is not None and conf is not None:
+                    # If active_agents is set, only include signals from active base agents
+                    if active_agents:
+                        base = agent.split("_")[0] if agent else ""
+                        if base not in active_agents:
+                            continue
                     ticker_signals[agent] = {"sig": sig, "conf": conf}
         signals_by_ticker[ticker] = ticker_signals
 
@@ -67,7 +100,8 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
 
     progress.update_status(agent_id, None, "Generating trading decisions")
 
-    start = time.time()
+    # Step: LLM analysis
+    llm_start = time.time()
     result = generate_trading_decision(
         tickers=tickers,
         signals_by_ticker=signals_by_ticker,
@@ -77,8 +111,14 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
         agent_id=agent_id,
         state=state,
     )
+    llm_time = time.time() - llm_start
+    print(f"   🤖 LLM analysis: {llm_time:.2f}s")
+    
+    # Legacy timing (keeping for compatibility)
     end = time.time()
-    print(f"Time taken: {end - start} seconds")
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"{Fore.YELLOW}[{timestamp}]{Style.RESET_ALL} Time taken: {end - start_time:.2f} seconds")
     message = HumanMessage(
         content=json.dumps({ticker: decision.model_dump() for ticker, decision in result.decisions.items()}),
         name=agent_id,
@@ -89,6 +129,16 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
                              "Portfolio Manager")
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(signals_by_ticker)
+    print(f"\n💼 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
 
     return {
         "messages": state["messages"] + [message],

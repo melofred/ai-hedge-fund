@@ -10,24 +10,60 @@ from src.tools.api import get_financial_metrics
 ##### Fundamental Agent #####
 def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_analyst_agent"):
     """Analyzes fundamental data and generates trading signals for multiple tickers."""
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 15  # seconds per ticker
     data = state["data"]
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     # Initialize fundamental analysis for each ticker
     fundamental_analysis = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(fundamental_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - FUNDAMENTAL ANALYSIS INCOMPLETE!")
+            print(f"   📊 Missing fundamental metrics for: {', '.join(tickers[len(fundamental_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing metric calculations")
+            break
+            
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
 
-        # Get the financial metrics
-        financial_metrics = get_financial_metrics(
-            ticker=ticker,
-            end_date=end_date,
-            period="ttm",
-            limit=10,
-            api_key=api_key,
-        )
+        # Step 1: Financial metrics
+        metrics_start = time.time()
+        try:
+            financial_metrics = get_financial_metrics(
+                ticker=ticker,
+                end_date=end_date,
+                period="ttm",
+                limit=10,
+                api_key=api_key,
+            )
+            metrics_time = time.time() - metrics_start
+            print(f"   📊 Financial metrics: {metrics_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching financial metrics for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching metrics")
+            financial_metrics = []
+            metrics_time = time.time() - metrics_start
 
         if not financial_metrics:
             progress.update_status(agent_id, ticker, "Failed: No financial metrics found")
@@ -141,6 +177,10 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
         }
 
         progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # Create the fundamental analysis message
     message = HumanMessage(
@@ -156,6 +196,16 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
     state["data"]["analyst_signals"][agent_id] = fundamental_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(fundamental_analysis)
+    print(f"\n📊 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
     
     return {
         "messages": [message],

@@ -41,24 +41,60 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
     4. Volatility Analysis
     5. Statistical Arbitrage Signals
     """
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 20  # seconds per ticker
     data = state["data"]
     start_date = data["start_date"]
     end_date = data["end_date"]
     tickers = data["tickers"]
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
     # Initialize analysis for each ticker
     technical_analysis = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(technical_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - TECHNICAL ANALYSIS INCOMPLETE!")
+            print(f"   📈 Missing technical signals for: {', '.join(tickers[len(technical_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing calculations")
+            break
+            
         progress.update_status(agent_id, ticker, "Analyzing price data")
 
-        # Get the historical price data
-        prices = get_prices(
-            ticker=ticker,
-            start_date=start_date,
-            end_date=end_date,
-            api_key=api_key,
-        )
+        # Step 1: Price data fetching
+        prices_start = time.time()
+        try:
+            prices = get_prices(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+                api_key=api_key,
+            )
+            prices_time = time.time() - prices_start
+            print(f"   📊 Price data: {prices_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching price data for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching prices")
+            prices = []
+            prices_time = time.time() - prices_start
 
         if not prices:
             progress.update_status(agent_id, ticker, "Failed: No price data found")
@@ -68,19 +104,16 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
         prices_df = prices_to_df(prices)
 
         progress.update_status(agent_id, ticker, "Calculating trend signals")
+        
+        # Step 2: Technical calculations
+        calc_start = time.time()
         trend_signals = calculate_trend_signals(prices_df)
-
-        progress.update_status(agent_id, ticker, "Calculating mean reversion")
         mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
-
-        progress.update_status(agent_id, ticker, "Calculating momentum")
         momentum_signals = calculate_momentum_signals(prices_df)
-
-        progress.update_status(agent_id, ticker, "Analyzing volatility")
         volatility_signals = calculate_volatility_signals(prices_df)
-
-        progress.update_status(agent_id, ticker, "Statistical analysis")
         stat_arb_signals = calculate_stat_arb_signals(prices_df)
+        calc_time = time.time() - calc_start
+        print(f"   📈 Technical calculations: {calc_time:.2f}s")
 
         # Combine all signals using a weighted ensemble approach
         strategy_weights = {
@@ -136,6 +169,10 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
             },
         }
         progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(technical_analysis, indent=4))
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # Create the technical analyst message
     message = HumanMessage(
@@ -150,6 +187,16 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
     state["data"]["analyst_signals"][agent_id] = technical_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(technical_analysis)
+    print(f"\n📈 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
 
     return {
         "messages": state["messages"] + [message],
@@ -200,10 +247,14 @@ def calculate_mean_reversion_signals(prices_df):
     """
     Mean reversion strategy using statistical measures and Bollinger Bands
     """
+    # Pre-calculate rolling windows for efficiency
+    close = prices_df["close"]
+    ma_50 = close.rolling(window=50)
+    ma_50_mean = ma_50.mean()
+    ma_50_std = ma_50.std()
+    
     # Calculate z-score of price relative to moving average
-    ma_50 = prices_df["close"].rolling(window=50).mean()
-    std_50 = prices_df["close"].rolling(window=50).std()
-    z_score = (prices_df["close"] - ma_50) / std_50
+    z_score = (close - ma_50_mean) / ma_50_std
 
     # Calculate Bollinger Bands
     bb_upper, bb_lower = calculate_bollinger_bands(prices_df)
@@ -242,15 +293,17 @@ def calculate_momentum_signals(prices_df):
     """
     Multi-factor momentum strategy
     """
-    # Price momentum
+    # Price momentum (optimized with pre-calculated rolling windows)
     returns = prices_df["close"].pct_change()
-    mom_1m = returns.rolling(21).sum()
+    returns_rolling = returns.rolling(21)
+    mom_1m = returns_rolling.sum()
     mom_3m = returns.rolling(63).sum()
     mom_6m = returns.rolling(126).sum()
 
-    # Volume momentum
-    volume_ma = prices_df["volume"].rolling(21).mean()
-    volume_momentum = prices_df["volume"] / volume_ma
+    # Volume momentum (optimized)
+    volume = prices_df["volume"]
+    volume_ma = volume.rolling(21).mean()
+    volume_momentum = volume / volume_ma
 
     # Relative strength
     # (would compare to market/sector in real implementation)

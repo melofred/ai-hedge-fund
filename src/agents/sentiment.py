@@ -11,23 +11,59 @@ from src.tools.api import get_insider_trades, get_company_news
 ##### Sentiment Agent #####
 def sentiment_analyst_agent(state: AgentState, agent_id: str = "sentiment_analyst_agent"):
     """Analyzes market sentiment and generates trading signals for multiple tickers."""
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 15  # seconds per ticker
     data = state.get("data", {})
     end_date = data.get("end_date")
     tickers = data.get("tickers")
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     # Initialize sentiment analysis for each ticker
     sentiment_analysis = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(sentiment_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - SENTIMENT ANALYSIS INCOMPLETE!")
+            print(f"   📰 Missing sentiment analysis for: {', '.join(tickers[len(sentiment_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing data fetching")
+            break
+            
         progress.update_status(agent_id, ticker, "Fetching insider trades")
 
-        # Get the insider trades
-        insider_trades = get_insider_trades(
-            ticker=ticker,
-            end_date=end_date,
-            limit=1000,
-            api_key=api_key,
-        )
+        # Step 1: Insider trades
+        insider_start = time.time()
+        try:
+            insider_trades = get_insider_trades(
+                ticker=ticker,
+                end_date=end_date,
+                limit=1000,
+                api_key=api_key,
+            )
+            insider_time = time.time() - insider_start
+            print(f"   👥 Insider trades: {insider_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching insider trades for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching insider trades")
+            insider_trades = []
+            insider_time = time.time() - insider_start
 
         progress.update_status(agent_id, ticker, "Analyzing trading patterns")
 
@@ -37,8 +73,17 @@ def sentiment_analyst_agent(state: AgentState, agent_id: str = "sentiment_analys
 
         progress.update_status(agent_id, ticker, "Fetching company news")
 
-        # Get the company news
-        company_news = get_company_news(ticker, end_date, limit=100, api_key=api_key)
+        # Step 2: Company news
+        news_start = time.time()
+        try:
+            company_news = get_company_news(ticker, end_date, limit=100, api_key=api_key)
+            news_time = time.time() - news_start
+            print(f"   📰 Company news: {news_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching company news for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching news")
+            company_news = []
+            news_time = time.time() - news_start
 
         # Get the sentiment from the company news
         sentiment = pd.Series([n.sentiment for n in company_news]).dropna()
@@ -116,6 +161,10 @@ def sentiment_analyst_agent(state: AgentState, agent_id: str = "sentiment_analys
         }
 
         progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # Create the sentiment message
     message = HumanMessage(
@@ -131,6 +180,16 @@ def sentiment_analyst_agent(state: AgentState, agent_id: str = "sentiment_analys
     state["data"]["analyst_signals"][agent_id] = sentiment_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(sentiment_analysis)
+    print(f"\n📰 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
 
     return {
         "messages": [message],

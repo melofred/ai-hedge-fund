@@ -33,21 +33,53 @@ def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
 
     Returns a bullish/bearish/neutral signal with confidence and reasoning.
     """
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 25  # seconds per ticker
+    
     data = state["data"]
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     analysis_data = {}
     fisher_analysis = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(fisher_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - FISHER ANALYSIS INCOMPLETE!")
+            print(f"   📊 Missing Fisher analysis for: {', '.join(tickers[len(fisher_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing analysis")
+            break
+            
         progress.update_status(agent_id, ticker, "Gathering financial line items")
-        # Include relevant line items for Phil Fisher's approach:
-        #   - Growth & Quality: revenue, net_income, earnings_per_share, R&D expense
-        #   - Margins & Stability: operating_income, operating_margin, gross_margin
-        #   - Management Efficiency & Leverage: total_debt, shareholders_equity, free_cash_flow
-        #   - Valuation: net_income, free_cash_flow (for P/E, P/FCF), ebit, ebitda
-        financial_line_items = search_line_items(
+        
+        # Step 1: Line items
+        line_items_start = time.time()
+        try:
+            # Include relevant line items for Phil Fisher's approach:
+            #   - Growth & Quality: revenue, net_income, earnings_per_share, R&D expense
+            #   - Margins & Stability: operating_income, operating_margin, gross_margin
+            #   - Management Efficiency & Leverage: total_debt, shareholders_equity, free_cash_flow
+            #   - Valuation: net_income, free_cash_flow (for P/E, P/FCF), ebit, ebitda
+            financial_line_items = search_line_items(
             ticker,
             [
                 "revenue",
@@ -69,15 +101,55 @@ def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
             limit=5,
             api_key=api_key,
         )
+            line_items_time = time.time() - line_items_start
+            print(f"   📋 Line items: {line_items_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching line items for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching line items")
+            financial_line_items = []
+            line_items_time = time.time() - line_items_start
 
         progress.update_status(agent_id, ticker, "Getting market cap")
-        market_cap = get_market_cap(ticker, end_date, api_key=api_key)
+        
+        # Step 2: Market cap
+        market_cap_start = time.time()
+        try:
+            market_cap = get_market_cap(ticker, end_date, api_key=api_key)
+            market_cap_time = time.time() - market_cap_start
+            print(f"   💰 Market cap: {market_cap_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching market cap for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching market cap")
+            market_cap = None
+            market_cap_time = time.time() - market_cap_start
 
         progress.update_status(agent_id, ticker, "Fetching insider trades")
-        insider_trades = get_insider_trades(ticker, end_date, limit=50, api_key=api_key)
+        
+        # Step 3: Insider trades
+        insider_start = time.time()
+        try:
+            insider_trades = get_insider_trades(ticker, end_date, limit=50, api_key=api_key)
+            insider_time = time.time() - insider_start
+            print(f"   👥 Insider trades: {insider_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching insider trades for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching insider trades")
+            insider_trades = []
+            insider_time = time.time() - insider_start
 
         progress.update_status(agent_id, ticker, "Fetching company news")
-        company_news = get_company_news(ticker, end_date, limit=50, api_key=api_key)
+        
+        # Step 4: Company news
+        news_start = time.time()
+        try:
+            company_news = get_company_news(ticker, end_date, limit=50, api_key=api_key)
+            news_time = time.time() - news_start
+            print(f"   📰 Company news: {news_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching company news for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching company news")
+            company_news = []
+            news_time = time.time() - news_start
 
         progress.update_status(agent_id, ticker, "Analyzing growth & quality")
         growth_quality = analyze_fisher_growth_quality(financial_line_items)
@@ -136,12 +208,17 @@ def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
         }
 
         progress.update_status(agent_id, ticker, "Generating Phil Fisher-style analysis")
+        
+        # Step 5: LLM analysis
+        llm_start = time.time()
         fisher_output = generate_fisher_output(
             ticker=ticker,
             analysis_data=analysis_data,
             state=state,
             agent_id=agent_id,
         )
+        llm_time = time.time() - llm_start
+        print(f"   🤖 LLM analysis: {llm_time:.2f}s")
 
         fisher_analysis[ticker] = {
             "signal": fisher_output.signal,
@@ -150,6 +227,10 @@ def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
         }
 
         progress.update_status(agent_id, ticker, "Done", analysis=fisher_output.reasoning)
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # Wrap results in a single message
     message = HumanMessage(content=json.dumps(fisher_analysis), name=agent_id)
@@ -160,6 +241,16 @@ def phil_fisher_agent(state: AgentState, agent_id: str = "phil_fisher_agent"):
     state["data"]["analyst_signals"][agent_id] = fisher_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(fisher_analysis)
+    print(f"\n📊 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
     
     return {"messages": [message], "data": state["data"]}
 

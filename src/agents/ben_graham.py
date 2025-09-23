@@ -25,23 +25,84 @@ def ben_graham_agent(state: AgentState, agent_id: str = "ben_graham_agent"):
     3. Discount to intrinsic value (e.g. Graham Number or net-net).
     4. Adequate margin of safety.
     """
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 25  # seconds per ticker
+    
     data = state["data"]
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     
     analysis_data = {}
     graham_analysis = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(graham_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - GRAHAM ANALYSIS INCOMPLETE!")
+            print(f"   📊 Missing Graham analysis for: {', '.join(tickers[len(graham_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing analysis")
+            break
+            
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        metrics = get_financial_metrics(ticker, end_date, period="annual", limit=10, api_key=api_key)
+        
+        # Step 1: Financial metrics
+        metrics_start = time.time()
+        try:
+            metrics = get_financial_metrics(ticker, end_date, period="annual", limit=10, api_key=api_key)
+            metrics_time = time.time() - metrics_start
+            print(f"   📊 Financial metrics: {metrics_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching financial metrics for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching metrics")
+            metrics = []
+            metrics_time = time.time() - metrics_start
 
         progress.update_status(agent_id, ticker, "Gathering financial line items")
-        financial_line_items = search_line_items(ticker, ["earnings_per_share", "revenue", "net_income", "book_value_per_share", "total_assets", "total_liabilities", "current_assets", "current_liabilities", "dividends_and_other_cash_distributions", "outstanding_shares"], end_date, period="annual", limit=10, api_key=api_key)
+        
+        # Step 2: Line items
+        line_items_start = time.time()
+        try:
+            financial_line_items = search_line_items(ticker, ["earnings_per_share", "revenue", "net_income", "book_value_per_share", "total_assets", "total_liabilities", "current_assets", "current_liabilities", "dividends_and_other_cash_distributions", "outstanding_shares"], end_date, period="annual", limit=10, api_key=api_key)
+            line_items_time = time.time() - line_items_start
+            print(f"   📋 Line items: {line_items_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching line items for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching line items")
+            financial_line_items = []
+            line_items_time = time.time() - line_items_start
 
         progress.update_status(agent_id, ticker, "Getting market cap")
-        market_cap = get_market_cap(ticker, end_date, api_key=api_key)
+        
+        # Step 3: Market cap
+        market_cap_start = time.time()
+        try:
+            market_cap = get_market_cap(ticker, end_date, api_key=api_key)
+            market_cap_time = time.time() - market_cap_start
+            print(f"   💰 Market cap: {market_cap_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching market cap for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching market cap")
+            market_cap = None
+            market_cap_time = time.time() - market_cap_start
 
         # Perform sub-analyses
         progress.update_status(agent_id, ticker, "Analyzing earnings stability")
@@ -68,16 +129,25 @@ def ben_graham_agent(state: AgentState, agent_id: str = "ben_graham_agent"):
         analysis_data[ticker] = {"signal": signal, "score": total_score, "max_score": max_possible_score, "earnings_analysis": earnings_analysis, "strength_analysis": strength_analysis, "valuation_analysis": valuation_analysis}
 
         progress.update_status(agent_id, ticker, "Generating Ben Graham analysis")
+        
+        # Step 4: LLM analysis
+        llm_start = time.time()
         graham_output = generate_graham_output(
             ticker=ticker,
             analysis_data=analysis_data,
             state=state,
             agent_id=agent_id,
         )
+        llm_time = time.time() - llm_start
+        print(f"   🤖 LLM analysis: {llm_time:.2f}s")
 
         graham_analysis[ticker] = {"signal": graham_output.signal, "confidence": graham_output.confidence, "reasoning": graham_output.reasoning}
 
         progress.update_status(agent_id, ticker, "Done", analysis=graham_output.reasoning)
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # Wrap results in a single message for the chain
     message = HumanMessage(content=json.dumps(graham_analysis), name=agent_id)
@@ -90,6 +160,16 @@ def ben_graham_agent(state: AgentState, agent_id: str = "ben_graham_agent"):
     state["data"]["analyst_signals"][agent_id] = graham_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(graham_analysis)
+    print(f"\n📚 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
 
     return {"messages": [message], "data": state["data"]}
 

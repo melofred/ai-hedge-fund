@@ -20,24 +20,60 @@ from src.tools.api import (
 
 def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analyst_agent"):
     """Run valuation across tickers and write signals back to `state`."""
+    import time
+    from datetime import datetime
+    
+    start_time = time.time()
+    max_execution_time = 25  # seconds per ticker
 
     data = state["data"]
     end_date = data["end_date"]
     tickers = data["tickers"]
     api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+
+    # Diagnostic logging
+    print(f"🔍 {agent_id} DIAGNOSTICS:")
+    print(f"   ⏱️  Timeout limit: {max_execution_time}s per ticker")
+    print(f"   📊 Total tickers: {len(tickers)}")
+    print(f"   🎯 Expected total time: {max_execution_time * len(tickers)}s")
+    print(f"   🤖 LLM provider: {state.get('model_provider', 'Unknown')}")
+    print(f"   🧠 LLM model: {state.get('model_name', 'Unknown')}")
+    print()
     valuation_analysis: dict[str, dict] = {}
 
     for ticker in tickers:
+        ticker_start = time.time()
+        
+        # Check execution time limit
+        elapsed_time = time.time() - start_time
+        if elapsed_time > max_execution_time:
+            print(f"🚨 CRITICAL TIMEOUT: {agent_id} exceeded {max_execution_time}s limit")
+            print(f"   ⏱️  Elapsed time: {elapsed_time:.2f}s")
+            print(f"   📊 Processed tickers: {len(valuation_analysis)}")
+            print(f"   ⚠️  Skipping remaining tickers - VALUATION ANALYSIS INCOMPLETE!")
+            print(f"   💰 Missing valuations for: {', '.join(tickers[len(valuation_analysis):])}")
+            print(f"   🔧 Consider: Increasing timeout, reducing tickers, or optimizing DCF calculations")
+            break
+            
         progress.update_status(agent_id, ticker, "Fetching financial data")
 
-        # --- Historical financial metrics ---
-        financial_metrics = get_financial_metrics(
-            ticker=ticker,
-            end_date=end_date,
-            period="ttm",
-            limit=8,
-            api_key=api_key,
-        )
+        # Step 1: Financial metrics
+        metrics_start = time.time()
+        try:
+            financial_metrics = get_financial_metrics(
+                ticker=ticker,
+                end_date=end_date,
+                period="ttm",
+                limit=8,
+                api_key=api_key,
+            )
+            metrics_time = time.time() - metrics_start
+            print(f"   📊 Financial metrics: {metrics_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching financial metrics for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching metrics")
+            financial_metrics = []
+            metrics_time = time.time() - metrics_start
         if not financial_metrics:
             progress.update_status(agent_id, ticker, "Failed: No financial metrics found")
             continue
@@ -45,13 +81,17 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
 
         # --- Enhanced line‑items ---
         progress.update_status(agent_id, ticker, "Gathering comprehensive line items")
-        line_items = search_line_items(
-            ticker=ticker,
-            line_items=[
-                "free_cash_flow",
-                "net_income",
-                "depreciation_and_amortization",
-                "capital_expenditure",
+        
+        # Step 2: Line items
+        line_items_start = time.time()
+        try:
+            line_items = search_line_items(
+                ticker=ticker,
+                line_items=[
+                    "free_cash_flow",
+                    "net_income",
+                    "depreciation_and_amortization",
+                    "capital_expenditure",
                 "working_capital",
                 "total_debt",
                 "cash_and_equivalents", 
@@ -66,6 +106,13 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
             limit=8,
             api_key=api_key,
         )
+            line_items_time = time.time() - line_items_start
+            print(f"   📋 Line items: {line_items_time:.2f}s")
+        except Exception as e:
+            print(f"⚠️  Error fetching line items for {ticker}: {e}")
+            progress.update_status(agent_id, ticker, "Error fetching line items")
+            line_items = []
+            line_items_time = time.time() - line_items_start
         if len(line_items) < 2:
             progress.update_status(agent_id, ticker, "Failed: Insufficient financial line items")
             continue
@@ -87,6 +134,9 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
 
         # Enhanced Discounted Cash Flow with WACC and scenarios
         progress.update_status(agent_id, ticker, "Calculating WACC and enhanced DCF")
+        
+        # Step 3: DCF calculations
+        dcf_start = time.time()
         
         # Calculate WACC
         wacc = calculate_wacc(
@@ -128,6 +178,9 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
             price_to_book_ratio=most_recent_metrics.price_to_book_ratio,
             book_value_growth=most_recent_metrics.book_value_growth or 0.03,
         )
+        
+        dcf_time = time.time() - dcf_start
+        print(f"   💰 DCF calculations: {dcf_time:.2f}s")
 
         # ------------------------------------------------------------------
         # Aggregate & signal
@@ -202,6 +255,10 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
             "reasoning": reasoning,
         }
         progress.update_status(agent_id, ticker, "Done", analysis=json.dumps(reasoning, indent=4))
+        
+        # Ticker completion summary
+        ticker_time = time.time() - ticker_start
+        print(f"   ✅ {ticker} completed in {ticker_time:.2f}s")
 
     # ---- Emit message (for LLM tool chain) ----
     msg = HumanMessage(content=json.dumps(valuation_analysis), name=agent_id)
@@ -212,6 +269,16 @@ def valuation_analyst_agent(state: AgentState, agent_id: str = "valuation_analys
     state["data"]["analyst_signals"][agent_id] = valuation_analysis
 
     progress.update_status(agent_id, None, "Done")
+    
+    # Final completion summary
+    total_time = time.time() - start_time
+    processed_tickers = len(valuation_analysis)
+    print(f"\n💰 {agent_id} COMPLETION SUMMARY:")
+    print(f"   ✅ Processed tickers: {processed_tickers}/{len(tickers)}")
+    print(f"   ⏱️  Total time: {total_time:.2f}s")
+    if processed_tickers < len(tickers):
+        print(f"   ⚠️  WARNING: Analysis incomplete due to timeout")
+        print(f"   📊 Skipped tickers: {len(tickers) - processed_tickers}")
     
     return {"messages": [msg], "data": data}
 
@@ -237,10 +304,14 @@ def calculate_owner_earnings_value(
     if owner_earnings <= 0:
         return 0
 
+    # Optimized DCF calculation with pre-calculated discount factors
     pv = 0.0
+    discount_factors = [(1 + required_return) ** yr for yr in range(1, num_years + 1)]
+    growth_factors = [(1 + growth_rate) ** yr for yr in range(1, num_years + 1)]
+    
     for yr in range(1, num_years + 1):
-        future = owner_earnings * (1 + growth_rate) ** yr
-        pv += future / (1 + required_return) ** yr
+        future = owner_earnings * growth_factors[yr - 1]
+        pv += future / discount_factors[yr - 1]
 
     terminal_growth = min(growth_rate, 0.03)
     term_val = (owner_earnings * (1 + growth_rate) ** num_years * (1 + terminal_growth)) / (
@@ -263,10 +334,14 @@ def calculate_intrinsic_value(
     if free_cash_flow is None or free_cash_flow <= 0:
         return 0
 
+    # Optimized DCF calculation with pre-calculated factors
     pv = 0.0
+    discount_factors = [(1 + discount_rate) ** yr for yr in range(1, num_years + 1)]
+    growth_factors = [(1 + growth_rate) ** yr for yr in range(1, num_years + 1)]
+    
     for yr in range(1, num_years + 1):
-        fcft = free_cash_flow * (1 + growth_rate) ** yr
-        pv += fcft / (1 + discount_rate) ** yr
+        fcft = free_cash_flow * growth_factors[yr - 1]
+        pv += fcft / discount_factors[yr - 1]
 
     term_val = (
         free_cash_flow * (1 + growth_rate) ** num_years * (1 + terminal_growth_rate)
