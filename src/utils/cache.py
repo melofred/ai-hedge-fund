@@ -8,10 +8,13 @@ import hashlib
 import json
 import os
 import time
+import threading
+import queue
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 
 import diskcache as dc
 from pydantic import BaseModel
@@ -22,7 +25,6 @@ class CacheConfig(BaseModel):
     max_memory_size: int = 100 * 1024 * 1024  # 100MB in-memory
     max_disk_size: int = 1024 * 1024 * 1024   # 1GB on disk
     cache_dir: str = "cache"
-    default_ttl: int = 3600  # 1 hour default TTL
     compression_level: int = 1  # Fast compression
     enable_async: bool = True
 
@@ -72,9 +74,19 @@ class FinancialDataCache:
         self._memory_access_times: Dict[str, float] = {}
         self._memory_size = 0
         
+        # Async disk write infrastructure
+        self._disk_queue = queue.Queue(maxsize=1000)  # Prevent memory bloat
+        self._disk_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="cache-disk")
+        self._disk_writer_thread = threading.Thread(target=self._disk_writer_loop, daemon=True)
+        self._disk_writer_thread.start()
+        
+        # Thread safety
+        self._memory_lock = threading.RLock()
+        
         print(f"✅ Cache initialized: {self.config.cache_dir}")
         print(f"   Memory limit: {self.config.max_memory_size / 1024 / 1024:.1f}MB")
         print(f"   Disk limit: {self.config.max_disk_size / 1024 / 1024:.1f}MB")
+        print(f"   Async disk writes: Enabled")
     
     def _generate_key(self, data_type: str, **kwargs) -> str:
         """Generate a consistent cache key from parameters."""
@@ -91,118 +103,131 @@ class FinancialDataCache:
             # Fallback for non-serializable data
             return len(str(data).encode())
     
+    def _disk_writer_loop(self):
+        """Background thread that processes disk write queue."""
+        while True:
+            try:
+                # Get next disk write task (blocks until available)
+                key, data = self._disk_queue.get(timeout=1.0)
+                
+                # Perform disk write
+                self.cache.set(key, data)
+                self._disk_queue.task_done()
+                
+            except queue.Empty:
+                # Timeout - continue loop (allows thread to be daemon)
+                continue
+            except Exception as e:
+                print(f"⚠️  Background disk write error: {e}")
+                self._disk_queue.task_done()
+    
+    def _queue_disk_write(self, key: str, data: Any):
+        """Queue a disk write operation for background processing."""
+        try:
+            # Non-blocking put - if queue is full, skip disk write
+            self._disk_queue.put_nowait((key, data))
+        except queue.Full:
+            # Queue is full - skip this disk write to prevent blocking
+            print(f"⚠️  Disk write queue full, skipping write for key: {key[:20]}...")
+    
     def _evict_memory_if_needed(self):
-        """Evict least recently used items from memory cache."""
-        while (self._memory_size > self.config.max_memory_size and 
-               self._memory_cache):
-            
-            # Find least recently used item
-            lru_key = min(self._memory_access_times.keys(), 
-                         key=lambda k: self._memory_access_times[k])
-            
-            # Remove from memory cache
-            if lru_key in self._memory_cache:
-                self._memory_size -= self._get_memory_size(self._memory_cache[lru_key])
-                del self._memory_cache[lru_key]
-                del self._memory_access_times[lru_key]
-                self.stats.evictions += 1
+        """Evict least recently used items from memory cache and queue disk write."""
+        with self._memory_lock:
+            while (self._memory_size > self.config.max_memory_size and 
+                   self._memory_cache):
+                
+                # Find least recently used item
+                lru_key = min(self._memory_access_times.keys(), 
+                             key=lambda k: self._memory_access_times[k])
+                
+                # Remove from memory cache
+                if lru_key in self._memory_cache:
+                    # Get the data before removing
+                    evicted_data = self._memory_cache[lru_key]
+                    
+                    # Queue disk write (non-blocking)
+                    self._queue_disk_write(lru_key, evicted_data)
+                    
+                    # Now remove from memory
+                    self._memory_size -= self._get_memory_size(evicted_data)
+                    del self._memory_cache[lru_key]
+                    del self._memory_access_times[lru_key]
+                    self.stats.evictions += 1
     
-    def _is_expired(self, timestamp: float, ttl: int) -> bool:
-        """Check if cached data is expired."""
-        return time.time() - timestamp > ttl
     
-    def get(self, data_type: str, ttl: Optional[int] = None, **kwargs) -> Optional[Any]:
+    def get(self, data_type: str, **kwargs) -> Optional[Any]:
         """
-        Get data from cache.
+        Get data from cache (LRU eviction only, no TTL).
+        
+        Flow: Memory Cache → Disk Cache → API (if both miss)
         
         Args:
             data_type: Type of data (e.g., 'prices', 'financials')
-            ttl: Time-to-live override (uses default if None)
             **kwargs: Parameters to generate cache key
             
         Returns:
-            Cached data or None if not found/expired
+            Cached data or None if not found
         """
         key = self._generate_key(data_type, **kwargs)
-        ttl = ttl or self.config.default_ttl
         
         self.stats.total_requests += 1
         
-        # Check memory cache first
-        if key in self._memory_cache:
-            data, timestamp = self._memory_cache[key]
-            if not self._is_expired(timestamp, ttl):
+        # Step 1: Check memory cache first (fastest)
+        with self._memory_lock:
+            if key in self._memory_cache:
+                data, timestamp = self._memory_cache[key]
                 self._memory_access_times[key] = time.time()
                 self.stats.hits += 1
                 return data
-            else:
-                # Expired, remove from memory
-                self._memory_size -= self._get_memory_size(data)
-                del self._memory_cache[key]
-                del self._memory_access_times[key]
         
-        # Check disk cache
+        # Step 2: Check disk cache (slower but persistent)
         try:
             cached_data = self.cache.get(key)
             if cached_data:
                 data, timestamp = cached_data
-                if not self._is_expired(timestamp, ttl):
-                    # Move to memory cache for faster future access
+                # Hydrate from disk to memory for faster future access
+                with self._memory_lock:
                     self._memory_cache[key] = cached_data
                     self._memory_access_times[key] = time.time()
                     self._memory_size += self._get_memory_size(data)
                     self._evict_memory_if_needed()
-                    
-                    self.stats.hits += 1
-                    return data
-                else:
-                    # Expired, remove from disk
-                    self.cache.delete(key)
+                
+                self.stats.hits += 1
+                return data
         except Exception as e:
-            print(f"⚠️  Cache read error: {e}")
+            print(f"⚠️  Disk cache read error: {e}")
         
+        # Step 3: True cache miss - data not in memory or disk
         self.stats.misses += 1
         return None
     
-    def set(self, data_type: str, data: Any, ttl: Optional[int] = None, **kwargs):
+    def set(self, data_type: str, data: Any, **kwargs):
         """
-        Store data in cache.
+        Store data in cache (LRU eviction only, no TTL).
+        
+        Flow: Store in Memory → Queue Disk Write → Evict if needed
         
         Args:
             data_type: Type of data (e.g., 'prices', 'financials')
             data: Data to cache
-            ttl: Time-to-live override (uses default if None)
             **kwargs: Parameters to generate cache key
         """
         key = self._generate_key(data_type, **kwargs)
-        ttl = ttl or self.config.default_ttl
         timestamp = time.time()
         
         cache_entry = (data, timestamp)
         
-        # Store in memory cache
-        self._memory_cache[key] = cache_entry
-        self._memory_access_times[key] = timestamp
-        self._memory_size += self._get_memory_size(data)
-        self._evict_memory_if_needed()
-        
-        # Store in disk cache asynchronously
-        if self.config.enable_async:
-            try:
-                # Check if there's a running event loop
-                loop = asyncio.get_running_loop()
-                asyncio.create_task(self._store_to_disk_async(key, cache_entry))
-            except RuntimeError:
-                # No event loop running, fall back to synchronous
-                try:
-                    self.cache.set(key, cache_entry, expire=ttl)
-                except Exception as e:
-                    print(f"⚠️  Cache write error: {e}")
-        else:
-            try:
-                self.cache.set(key, cache_entry, expire=ttl)
-            except Exception as e:
-                print(f"⚠️  Cache write error: {e}")
+        # Step 1: Store in memory cache (fast access) - thread-safe
+        with self._memory_lock:
+            self._memory_cache[key] = cache_entry
+            self._memory_access_times[key] = timestamp
+            self._memory_size += self._get_memory_size(data)
+            
+            # Step 2: Queue disk write (non-blocking)
+            self._queue_disk_write(key, cache_entry)
+            
+            # Step 3: Evict from memory if needed (after queuing disk write)
+            self._evict_memory_if_needed()
     
     async def _store_to_disk_async(self, key: str, data: Any):
         """Asynchronously store data to disk cache."""
@@ -231,8 +256,21 @@ class FinancialDataCache:
     
     def close(self):
         """Close cache and cleanup resources."""
+        # Wait for pending disk writes to complete
+        try:
+            self._disk_queue.join()  # Wait for all queued writes to complete
+        except Exception as e:
+            print(f"⚠️  Error waiting for disk writes: {e}")
+        
+        # Shutdown thread pool
+        try:
+            self._disk_executor.shutdown(wait=True)
+        except Exception as e:
+            print(f"⚠️  Error shutting down disk executor: {e}")
+        
+        # Close disk cache
         self.cache.close()
-        print("🔒 Cache closed")
+        print("🔒 Cache closed (async disk writes completed)")
 
 
 # Global cache instance
@@ -293,41 +331,41 @@ def print_cache_stats():
 
 
 # Convenience functions for common data types
-def cache_prices(ticker: str, start_date: str, end_date: str, data: Any, ttl: int = 1800):
-    """Cache price data (30 min TTL)."""
-    get_cache().set('prices', data, ttl=ttl, ticker=ticker, start_date=start_date, end_date=end_date)
+def cache_prices(ticker: str, start_date: str, end_date: str, data: Any):
+    """Cache price data (LRU eviction only)."""
+    get_cache().set('prices', data, ticker=ticker, start_date=start_date, end_date=end_date)
 
 
-def get_cached_prices(ticker: str, start_date: str, end_date: str, ttl: int = 1800) -> Optional[Any]:
+def get_cached_prices(ticker: str, start_date: str, end_date: str) -> Optional[Any]:
     """Get cached price data."""
-    return get_cache().get('prices', ttl=ttl, ticker=ticker, start_date=start_date, end_date=end_date)
+    return get_cache().get('prices', ticker=ticker, start_date=start_date, end_date=end_date)
 
 
-def cache_financials(ticker: str, end_date: str, limit: int, data: Any, ttl: int = 3600):
-    """Cache financial metrics (1 hour TTL)."""
-    get_cache().set('financials', data, ttl=ttl, ticker=ticker, end_date=end_date, limit=limit)
+def cache_financials(ticker: str, end_date: str, limit: int, data: Any):
+    """Cache financial metrics (LRU eviction only)."""
+    get_cache().set('financials', data, ticker=ticker, end_date=end_date, limit=limit)
 
 
-def get_cached_financials(ticker: str, end_date: str, limit: int, ttl: int = 3600) -> Optional[Any]:
+def get_cached_financials(ticker: str, end_date: str, limit: int) -> Optional[Any]:
     """Get cached financial metrics."""
-    return get_cache().get('financials', ttl=ttl, ticker=ticker, end_date=end_date, limit=limit)
+    return get_cache().get('financials', ticker=ticker, end_date=end_date, limit=limit)
 
 
-def cache_news(ticker: str, end_date: str, limit: int, data: Any, ttl: int = 1800):
-    """Cache news data (30 min TTL)."""
-    get_cache().set('news', data, ttl=ttl, ticker=ticker, end_date=end_date, limit=limit)
+def cache_news(ticker: str, end_date: str, limit: int, data: Any):
+    """Cache news data (LRU eviction only)."""
+    get_cache().set('news', data, ticker=ticker, end_date=end_date, limit=limit)
 
 
-def get_cached_news(ticker: str, end_date: str, limit: int, ttl: int = 1800) -> Optional[Any]:
+def get_cached_news(ticker: str, end_date: str, limit: int) -> Optional[Any]:
     """Get cached news data."""
-    return get_cache().get('news', ttl=ttl, ticker=ticker, end_date=end_date, limit=limit)
+    return get_cache().get('news', ticker=ticker, end_date=end_date, limit=limit)
 
 
-def cache_insider_trades(ticker: str, end_date: str, limit: int, data: Any, ttl: int = 3600):
-    """Cache insider trades (1 hour TTL)."""
-    get_cache().set('insider_trades', data, ttl=ttl, ticker=ticker, end_date=end_date, limit=limit)
+def cache_insider_trades(ticker: str, end_date: str, limit: int, data: Any):
+    """Cache insider trades (LRU eviction only)."""
+    get_cache().set('insider_trades', data, ticker=ticker, end_date=end_date, limit=limit)
 
 
-def get_cached_insider_trades(ticker: str, end_date: str, limit: int, ttl: int = 3600) -> Optional[Any]:
+def get_cached_insider_trades(ticker: str, end_date: str, limit: int) -> Optional[Any]:
     """Get cached insider trades."""
-    return get_cache().get('insider_trades', ttl=ttl, ticker=ticker, end_date=end_date, limit=limit)
+    return get_cache().get('insider_trades', ticker=ticker, end_date=end_date, limit=limit)

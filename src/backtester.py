@@ -305,6 +305,13 @@ class Backtester:
 
         # Precompute horizons in business days
         agent_horizons = {key: max(1, int(cfg.get("horizon_days", 1))) for key, cfg in ANALYST_CONFIG.items()}
+        
+        # Initialize per-ticker agent analysis schedule - track when each agent should next run analysis for each ticker
+        agent_ticker_next_analysis = {}
+        for agent_key in self.selected_analysts:
+            agent_ticker_next_analysis[agent_key] = {}
+            for ticker in self.tickers:
+                agent_ticker_next_analysis[agent_key][ticker] = 0  # All agents run on day 0 for all tickers
 
         for i, current_date in enumerate(dates):
             lookback_start = (current_date - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -345,28 +352,60 @@ class Backtester:
             # ---------------------------------------------------------------
             # 1) Execute the agent's trades
             # ---------------------------------------------------------------
-            # Determine active agents by cadence for this date index
-            all_active_agents = [key for key, horizon in agent_horizons.items() if (i % horizon) == 0]
+            # Check which agents should run analysis today for which tickers
+            agents_to_run = []
+            tickers_to_analyze = set()
             
-            # Filter active_agents to only include selected analysts
-            active_agents = [key for key in all_active_agents if key in self.selected_analysts]
-
-            output = self.agent(
-                tickers=self.tickers,
-                start_date=lookback_start,
-                end_date=current_date_str,
-                portfolio=self.portfolio,
-                model_name=self.model_name,
-                model_provider=self.model_provider,
-                selected_analysts=self.selected_analysts,
-                active_agents=active_agents,
-            )
-            decisions = output["decisions"]
-            analyst_signals = output["analyst_signals"]
-
-            # If no agents are active today, force holds
-            if len(active_agents) == 0:
+            for agent_key in self.selected_analysts:
+                for ticker in self.tickers:
+                    if i >= agent_ticker_next_analysis[agent_key][ticker]:
+                        agents_to_run.append(agent_key)
+                        tickers_to_analyze.add(ticker)
+            
+            # If no agents should run today, skip analysis entirely and force holds
+            if len(agents_to_run) == 0:
+                print(f"   ⏭️  Skipping analysis on {current_date_str} - no agents scheduled for any tickers")
                 decisions = {t: {"action": "hold", "quantity": 0} for t in self.tickers}
+                analyst_signals = {}
+            else:
+                # Only run analysis for scheduled agents and tickers
+                print(f"   🔍 Running analysis for {len(set(agents_to_run))} agents on {current_date_str}: {sorted(set(agents_to_run))}")
+                print(f"   📊 Analyzing tickers: {sorted(tickers_to_analyze)}")
+                
+                output = self.agent(
+                    tickers=self.tickers,
+                    start_date=lookback_start,
+                    end_date=current_date_str,
+                    portfolio=self.portfolio,
+                    model_name=self.model_name,
+                    model_provider=self.model_provider,
+                    selected_analysts=self.selected_analysts,
+                    active_agents=list(set(agents_to_run)),
+                )
+                decisions = output["decisions"]
+                analyst_signals = output["analyst_signals"]
+                
+                # Filter decisions to only allow trading for tickers that are on their horizon day
+                filtered_decisions = {}
+                for ticker in self.tickers:
+                    # Check if any agent is scheduled to trade this ticker today
+                    ticker_scheduled = ticker in tickers_to_analyze
+                    
+                    if ticker_scheduled:
+                        # Allow trading for this ticker
+                        filtered_decisions[ticker] = decisions.get(ticker, {"action": "hold", "quantity": 0})
+                    else:
+                        # Force hold for this ticker (not on horizon day)
+                        filtered_decisions[ticker] = {"action": "hold", "quantity": 0}
+                
+                decisions = filtered_decisions
+                
+                # Update schedule for agents that just ran analysis (per ticker)
+                for agent_key in set(agents_to_run):
+                    for ticker in self.tickers:
+                        if i >= agent_ticker_next_analysis[agent_key][ticker]:
+                            agent_ticker_next_analysis[agent_key][ticker] = i + agent_horizons[agent_key]
+                            print(f"   📅 {agent_key} next analysis for {ticker} scheduled for day {agent_ticker_next_analysis[agent_key][ticker]}")
 
             # Execute trades for each ticker
             executed_trades = {}
