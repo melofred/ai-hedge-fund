@@ -346,7 +346,10 @@ class Backtester:
             # 1) Execute the agent's trades
             # ---------------------------------------------------------------
             # Determine active agents by cadence for this date index
-            active_agents = [key for key, horizon in agent_horizons.items() if (i % horizon) == 0]
+            all_active_agents = [key for key, horizon in agent_horizons.items() if (i % horizon) == 0]
+            
+            # Filter active_agents to only include selected analysts
+            active_agents = [key for key in all_active_agents if key in self.selected_analysts]
 
             output = self.agent(
                 tickers=self.tickers,

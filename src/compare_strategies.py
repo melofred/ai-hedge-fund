@@ -21,10 +21,10 @@ import questionary
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent))
 
-from backtester import Backtester
-from main import run_hedge_fund
-from tools.api import get_prices
-from utils.analysts import ANALYST_ORDER, ANALYST_CONFIG
+from src.backtester import Backtester
+from src.main import run_hedge_fund
+from src.tools.api import get_prices
+from src.utils.analysts import ANALYST_ORDER, ANALYST_CONFIG
 
 init(autoreset=True)
 

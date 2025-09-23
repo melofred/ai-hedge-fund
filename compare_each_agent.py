@@ -21,10 +21,10 @@ from colorama import Fore, Style, init
 # Local imports
 sys.path.append(str(Path(__file__).parent))
 
-from backtester import Backtester
-from main import run_hedge_fund
-from tools.api import get_prices
-from utils.analysts import ANALYST_CONFIG
+from src.backtester import Backtester
+from src.main import run_hedge_fund
+from src.tools.api import get_prices
+from src.utils.analysts import ANALYST_CONFIG
 
 init(autoreset=True)
 
