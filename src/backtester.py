@@ -306,14 +306,33 @@ class Backtester:
         # Precompute horizons in business days
         agent_horizons = {key: max(1, int(cfg.get("horizon_days", 1))) for key, cfg in ANALYST_CONFIG.items()}
 
+        # Initialize per-ticker agent analysis schedule - track when each agent should next run analysis for each ticker
+        agent_ticker_last_analysis = {}
+        for agent_key in self.selected_analysts:
+            agent_ticker_last_analysis[agent_key] = {}
+            for ticker in self.tickers:
+                agent_ticker_last_analysis[agent_key][ticker] = None  # No previous analysis
+
+        def calculate_data_lookback_period(agent_ticker_last_analysis, current_date, agent_key, ticker):
+            """Calculate appropriate data lookback period to avoid data gaps"""
+            last_analysis = agent_ticker_last_analysis.get(agent_key, {}).get(ticker)
+            
+            if last_analysis is None:
+                # First analysis - use standard 30-day lookback
+                return current_date - timedelta(days=30)
+            else:
+                # Use the later of: last analysis date OR 30 days ago
+                # This ensures we don't miss any data between analyses
+                thirty_days_ago = current_date - timedelta(days=30)
+                return max(last_analysis, thirty_days_ago)
+
         for i, current_date in enumerate(dates):
-            lookback_start = (current_date - timedelta(days=30)).strftime("%Y-%m-%d")
             current_date_str = current_date.strftime("%Y-%m-%d")
             previous_date_str = (current_date - timedelta(days=1)).strftime("%Y-%m-%d")
 
-            # Skip if there's no prior day to look back (i.e., first date in the range)
-            if lookback_start == current_date_str:
-                continue
+            # Calculate gap-aware lookback period for active agents
+            # This will be updated after we determine which agents are running
+            lookback_start = (current_date - timedelta(days=30)).strftime("%Y-%m-%d")  # Default fallback
 
             # Get current prices for all tickers
             try:
@@ -345,25 +364,96 @@ class Backtester:
             # ---------------------------------------------------------------
             # 1) Execute the agent's trades
             # ---------------------------------------------------------------
-            # Determine active agents by cadence for this date index
-            active_agents = [key for key, horizon in agent_horizons.items() if (i % horizon) == 0]
+            # Check which agents should run analysis today for which tickers
+            agents_to_run = []
+            tickers_to_analyze = set()
+            
+            for agent_key in self.selected_analysts:
+                agent_timeframe = agent_horizons[agent_key]
+                
+                for ticker in self.tickers:
+                    last_analysis = agent_ticker_last_analysis[agent_key][ticker]
+                    
+                    # Check if this agent should analyze this ticker today
+                    should_analyze = False
+                    
+                    if last_analysis is None:
+                        # First analysis for this agent-ticker combination
+                        should_analyze = True
+                    else:
+                        # Check if enough time has passed since last analysis
+                        days_since_analysis = (current_date - last_analysis).days
+                        if days_since_analysis >= agent_timeframe:
+                            should_analyze = True
+                    
+                    if should_analyze:
+                        agents_to_run.append(agent_key)
+                        tickers_to_analyze.add(ticker)
 
-            output = self.agent(
-                tickers=self.tickers,
-                start_date=lookback_start,
-                end_date=current_date_str,
-                portfolio=self.portfolio,
-                model_name=self.model_name,
-                model_provider=self.model_provider,
-                selected_analysts=self.selected_analysts,
-                active_agents=active_agents,
-            )
-            decisions = output["decisions"]
-            analyst_signals = output["analyst_signals"]
-
-            # If no agents are active today, force holds
-            if len(active_agents) == 0:
+            # If no agents should run today, skip analysis entirely and force holds
+            if len(agents_to_run) == 0:
+                print(f"   ⏭️  Skipping analysis on {current_date_str} - no agents scheduled for any tickers")
                 decisions = {t: {"action": "hold", "quantity": 0} for t in self.tickers}
+                analyst_signals = {}
+            else:
+                # Only run analysis for scheduled agents and tickers
+                print(f"   🔍 Running analysis for {len(set(agents_to_run))} agents on {current_date_str}: {sorted(set(agents_to_run))}")
+                print(f"   📊 Analyzing tickers: {sorted(tickers_to_analyze)}")
+                
+                # Calculate gap-aware lookback period for the active agents
+                # Use the earliest lookback period among active agents to ensure comprehensive data
+                gap_aware_lookback_dates = []
+                for agent_key in set(agents_to_run):
+                    for ticker in tickers_to_analyze:
+                        gap_aware_date = calculate_data_lookback_period(
+                            agent_ticker_last_analysis, current_date, agent_key, ticker
+                        )
+                        gap_aware_lookback_dates.append(gap_aware_date)
+                
+                if gap_aware_lookback_dates:
+                    # Use the earliest date to ensure we have all data needed
+                    lookback_start = min(gap_aware_lookback_dates).strftime("%Y-%m-%d")
+                    print(f"   📅 Gap-aware lookback period: {lookback_start} to {current_date_str}")
+                else:
+                    # Fallback to default 30-day lookback
+                    lookback_start = (current_date - timedelta(days=30)).strftime("%Y-%m-%d")
+                    print(f"   📅 Using default 30-day lookback: {lookback_start} to {current_date_str}")
+                
+                output = self.agent(
+                    tickers=list(tickers_to_analyze),  # Only analyze relevant tickers
+                    start_date=lookback_start,
+                    end_date=current_date_str,
+                    portfolio=self.portfolio,
+                    model_name=self.model_name,
+                    model_provider=self.model_provider,
+                    selected_analysts=self.selected_analysts,
+                    active_agents=list(set(agents_to_run)),  # Only active agents
+                )
+                decisions = output["decisions"]
+                analyst_signals = output["analyst_signals"]
+                
+                # Filter decisions to only allow trading for tickers that are on their timeframe
+                filtered_decisions = {}
+                for ticker in self.tickers:
+                    # Check if any agent is scheduled to trade this ticker today
+                    ticker_scheduled = ticker in tickers_to_analyze
+                    
+                    if ticker_scheduled:
+                        # Allow trading for this ticker
+                        filtered_decisions[ticker] = decisions.get(ticker, {"action": "hold", "quantity": 0})
+                    else:
+                        # Force hold for this ticker (not on its timeframe)
+                        filtered_decisions[ticker] = {"action": "hold", "quantity": 0}
+                
+                decisions = filtered_decisions
+                
+                # Update schedule for agents that just ran analysis (per ticker)
+                for agent_key in set(agents_to_run):
+                    for ticker in tickers_to_analyze:
+                        if agent_key in agents_to_run:  # This agent ran analysis
+                            agent_ticker_last_analysis[agent_key][ticker] = current_date
+                            print(f"   📅 {agent_key} next analysis for {ticker} scheduled for {current_date + timedelta(days=agent_horizons[agent_key])}")
+
 
             # Execute trades for each ticker
             executed_trades = {}
